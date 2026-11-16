@@ -1,25 +1,17 @@
 # Product usage data
 
-The T3 Code server sends product usage events to T3 Code's own endpoint at `ingest.t3.codes`,
-associated with a hashed account or installation identifier. To count how many installations one person
-uses, the server also sends hashed account identifiers: your T3 Connect account, your OpenAI and
-Claude accounts when you are signed in, and a random identifier for each device that connects. The endpoint keeps a copy of each
-event and forwards events to PostHog. Events include the provider, model, reasoning effort,
-permission mode, turn result, duration, release channel, and main-agent token totals when
-available.
+fwai sends no product usage data by default.
 
-Events do not include prompts, responses, file contents, authentication tokens, conversation IDs,
-raw provider events, or child-agent output. Child-agent token use is excluded from the totals.
+To collect usage events from your own servers in your own PostHog project, set
+`T3CODE_TELEMETRY_ENABLED=true`, `T3CODE_POSTHOG_KEY`, and `T3CODE_POSTHOG_HOST` in the server's
+environment before starting it. Events include the provider, model, reasoning effort, permission
+mode, turn result, duration, release channel, and main-agent token totals when available. They do
+not include prompts, responses, file contents, authentication tokens, conversation IDs, raw
+provider events, or child-agent output.
 
-T3 Code also sends relay connection traces to Axiom to diagnose T3 Connect connectivity.
-
-To disable product events and relay tracing, set `T3CODE_TELEMETRY_ENABLED=false` in the server's
-environment before starting it. Relay tracing also stops when `T3CODE_OTEL_SDK_DISABLED` or
-`OTEL_SDK_DISABLED` turns OpenTelemetry export off. The web app in a browser, including one the
-`t3` CLI opens, does not read these variables.
-
-The desktop app reads `T3CODE_TELEMETRY_ENABLED` from your shell profile (for example `~/.zshrc`) on macOS and
-Linux, so export it there and restart the app. On Windows, set it as a user environment variable.
+The desktop app reads these variables from your shell profile (for example `~/.zshrc`) on macOS
+and Linux, so export them there and restart the app. On Windows, set them as user environment
+variables.
 
 ## Export diagnostics to your own receiver
 

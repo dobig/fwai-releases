@@ -2665,6 +2665,14 @@ export function resolveDesktopProductName(
     : (desktopPackageJson.productName ?? "fwai");
 }
 
+/** electron-builder names the Windows executable after the product name, which differs per stage. */
+export function resolveWindowsExecutableName(
+  version: string,
+  identity: FwaiDesktopIdentity = fwaiDesktopIdentity("prod"),
+): string {
+  return `${resolveDesktopProductName(version, identity)}.exe`;
+}
+
 export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   platform: typeof BuildPlatform.Type,
   target: string,
@@ -3951,7 +3959,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   if (options.platform === "win") {
     yield* validateWindowsPackagedPayload({
       stageDistDir,
-      appExecutableName: `${resolveDesktopProductName(appVersion)}.exe`,
+      appExecutableName: resolveWindowsExecutableName(appVersion, desktopIdentity),
       targetArch: options.arch,
       appVersion,
       expectWslRuntime: bundlesWslRuntime({

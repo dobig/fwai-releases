@@ -38,6 +38,7 @@ import {
   resolveMacWebAuthnEntitlements,
   resolveMacPasskeySigningConfiguration,
   resolveDesktopIdentity,
+  resolveWindowsExecutableName,
   resolveMergedStageDependencies,
   resolveBuildOptions,
   stageWslRuntimeArchive,
@@ -521,6 +522,17 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       ),
     ),
   );
+
+  it("names the Windows executable after the stage's product name", () => {
+    assert.equal(resolveWindowsExecutableName("1.2.3", resolveDesktopIdentity({})), "fwai.exe");
+    assert.equal(
+      resolveWindowsExecutableName(
+        "1.2.3-preview.20261116.4",
+        resolveDesktopIdentity({ T3CODE_FWAI_STAGE: "staging" }),
+      ),
+      "fwai Staging.exe",
+    );
+  });
 
   it.effect("gives staging builds their own installed identity and keeps prod's", () =>
     Effect.gen(function* () {
