@@ -234,7 +234,8 @@ jobs:
           set -euo pipefail
           cd release-assets
           shopt -s nullglob
-          archives=(fwai-*.tar.gz fwai-*.zip)
+          # Desktop zips (macOS update feed) share the fwai- prefix; CLI archives carry an OS key.
+          archives=("fwai-$VERSION"-darwin-*.tar.gz "fwai-$VERSION"-linux-*.tar.gz "fwai-$VERSION"-win32-*.zip)
           [[ ${#archives[@]} -eq 5 ]] || { echo "::error::expected 5 CLI archives, got: ${archives[*]}"; exit 1; }
           sha256sum "${archives[@]}" > SHA256SUMS
           cat SHA256SUMS
