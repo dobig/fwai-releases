@@ -5,7 +5,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/dobig/fwai-releases/prod/scripts/install.sh | sh
 #
 # Environment:
-#   T3CODE_CHANNEL           release train to follow: stable, nightly, or preview
+#   T3CODE_CHANNEL           release train to follow: stable or preview
 #                            (default: stable; preview is a maintainers' test train)
 #   T3CODE_VERSION           exact version to install (overrides T3CODE_CHANNEL)
 #   T3CODE_HOME              fwai home directory (default: ~/.fwai)
@@ -147,13 +147,13 @@ version="${T3CODE_VERSION:-}"
 if [ -z "$version" ]; then
   case "$channel" in
     stable) tag_pattern='v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)' ;;
-    nightly | preview) tag_pattern="v\([0-9][^\"]*-${channel}\.[0-9]*\.[0-9]*\)" ;;
-    *) fail "T3CODE_CHANNEL must be stable, nightly, or preview" ;;
+    preview) tag_pattern="v\([0-9][^\"]*-preview\.[0-9]*\.[0-9]*\)" ;;
+    *) fail "T3CODE_CHANNEL must be stable or preview" ;;
   esac
   tmp_index="$(mktemp)"
   if [ "$channel" = stable ]; then
     # release.yml marks only plain stable releases latest. This is a github.com
-    # page, so it is not cut off by a page of newer nightlies or the API quota.
+    # page, so it is not cut off by a page of newer previews or the API quota.
     fetch "https://github.com/${repo}/releases/latest" "$tmp_index" application/json
     version="$(sed -n "s/.*\"tag_name\": *\"${tag_pattern}\".*/\1/p" "$tmp_index" | head -n 1)"
   else

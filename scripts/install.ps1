@@ -4,7 +4,7 @@
 #   irm https://raw.githubusercontent.com/dobig/fwai-releases/prod/scripts/install.ps1 | iex
 #
 # Environment:
-#   T3CODE_CHANNEL           release train to follow: stable, nightly, or preview
+#   T3CODE_CHANNEL           release train to follow: stable or preview
 #                            (default: stable; preview is a maintainers' test train)
 #   T3CODE_VERSION           exact version to install (overrides T3CODE_CHANNEL)
 #   T3CODE_HOME              fwai home directory (default: ~\.fwai)
@@ -129,13 +129,12 @@ $version = $env:T3CODE_VERSION
 if (-not $version) {
   $tagPattern = switch ($channel) {
     "stable" { '^v\d+\.\d+\.\d+$' }
-    "nightly" { '^v\d+\.\d+\.\d+-nightly\.\d+\.\d+$' }
     "preview" { '^v\d+\.\d+\.\d+-preview\.\d+\.\d+$' }
-    default { Fail "T3CODE_CHANNEL must be stable, nightly, or preview" }
+    default { Fail "T3CODE_CHANNEL must be stable or preview" }
   }
   if ($channel -eq "stable") {
     # release.yml marks only plain stable releases latest. This is a github.com
-    # page, so it is not cut off by a page of newer nightlies or the API quota.
+    # page, so it is not cut off by a page of newer previews or the API quota.
     $release = Invoke-RestMethod -Uri "https://github.com/$repo/releases/latest" -Headers @{ "User-Agent" = "fwai-install"; "Accept" = "application/json" }
     $tag = ($release | Where-Object { $_.tag_name -match $tagPattern }).tag_name
   } else {
