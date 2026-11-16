@@ -1,0 +1,291 @@
+name: Release
+
+# dobig/fwai_code publishes its app/CLI code to this repository's branches
+# (scripts/fwai-sync-release-repo.sh there). A push to `staging` builds every
+# platform against the staging services as a pre-release `X.Y.Z-preview.*`;
+# a push to `prod` builds the prod release `vX.Y.Z` and marks it latest.
+
+on:
+  push:
+    branches: [staging, prod]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Preflight
+    if: github.ref_name == 'staging' || github.ref_name == 'prod'
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: meta
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          base="$(node -p "require('./apps/desktop/package.json').version")"
+          if [[ "$GITHUB_REF_NAME" == staging ]]; then
+            # The preview format gives no update feed and no CLI update offer.
+            version="$base-preview.$(date -u +%Y%m%d).$GITHUB_RUN_NUMBER"
+          else
+            version="$base"
+            if gh release view "v$version" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "::error::v$version is already released; bump apps/desktop/package.json in dobig/fwai_code"
+              exit 1
+            fi
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing fwai $version ($GITHUB_REF_NAME)" >> "$GITHUB_STEP_SUMMARY"
+
+  # Server, web client and Electron main, built once for every target.
+  bundle:
+    name: JS bundle
+    needs: [preflight]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      STAGE: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: false
+
+      - name: Install bundle dependencies
+        run: vp install --filter=t3... --filter=@t3tools/web... --filter=@t3tools/desktop... --filter=@t3tools/scripts...
+
+      - name: Load stage
+        run: |
+          set -euo pipefail
+          . scripts/lib/fwai-stage.sh
+          fwai_load_stage "$STAGE"
+          for key in T3CODE_FWAI_STAGE T3CODE_FWAI_GATEWAY_URL T3CODE_FWAI_CLIENT_ID T3CODE_RELAY_URL VITE_HOSTED_APP_URL; do
+            echo "$key=${!key}" >> "$GITHUB_ENV"
+          done
+
+      - name: Align package versions to release version
+        run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
+
+      # @t3tools/desktop#build compiles the Linux browser secret helper, which needs libsecret headers.
+      - name: Install browser secret helper build libraries
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev pkg-config
+
+      - name: Build JS bundle
+        run: |
+          set -euo pipefail
+          vp run build:desktop
+          grep -rqF "$T3CODE_RELAY_URL" apps/server/dist/client/assets || { echo "::error::the web client has no relay URL"; exit 1; }
+
+      - name: Upload JS bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: js-bundle
+          path: |
+            apps/server/dist
+            apps/desktop/dist-electron
+          if-no-files-found: error
+          retention-days: 1
+
+  mac_arm64:
+    name: macOS arm64
+    needs: [preflight, bundle]
+    uses: ./.github/workflows/release-target.yml
+    secrets: inherit
+    with:
+      label: macOS arm64
+      runner: macos-26
+      platform: mac
+      target: dmg
+      arch: arm64
+      rust_target: aarch64-apple-darwin
+      cli_archive: true
+      version: ${{ needs.preflight.outputs.version }}
+      stage: ${{ github.ref_name }}
+
+  # No darwin-x64 CLI: Node single-executables segfault there.
+  mac_x64:
+    name: macOS x64
+    needs: [preflight, bundle]
+    uses: ./.github/workflows/release-target.yml
+    secrets: inherit
+    with:
+      label: macOS x64
+      runner: macos-26
+      platform: mac
+      target: dmg
+      arch: x64
+      rust_target: x86_64-apple-darwin
+      version: ${{ needs.preflight.outputs.version }}
+      stage: ${{ github.ref_name }}
+
+  linux_x64:
+    name: Linux x64
+    needs: [preflight, bundle]
+    uses: ./.github/workflows/release-target.yml
+    with:
+      label: Linux x64
+      runner: ubuntu-24.04
+      platform: linux
+      target: AppImage
+      arch: x64
+      rust_target: x86_64-unknown-linux-gnu
+      cli_archive: true
+      version: ${{ needs.preflight.outputs.version }}
+      stage: ${{ github.ref_name }}
+
+  linux_arm64:
+    name: Linux arm64
+    needs: [preflight, bundle]
+    uses: ./.github/workflows/release-target.yml
+    with:
+      label: Linux arm64
+      runner: ubuntu-24.04-arm
+      platform: linux
+      target: AppImage
+      arch: arm64
+      rust_target: aarch64-unknown-linux-gnu
+      cli_archive: true
+      version: ${{ needs.preflight.outputs.version }}
+      stage: ${{ github.ref_name }}
+
+  # Cross-built on Linux (cargo-xwin, Node SEA for win-*), checked on Windows.
+  # Each embeds the same-arch Linux CLI archive as its WSL runtime.
+  win_x64:
+    name: Windows x64
+    needs: [preflight, bundle, linux_x64]
+    uses: ./.github/workflows/release-target.yml
+    with:
+      label: Windows x64
+      runner: ubuntu-24.04
+      verify_runner: windows-2025
+      platform: win
+      target: nsis
+      arch: x64
+      rust_target: x86_64-pc-windows-msvc
+      cli_archive: true
+      version: ${{ needs.preflight.outputs.version }}
+      stage: ${{ github.ref_name }}
+
+  win_arm64:
+    name: Windows arm64
+    needs: [preflight, bundle, linux_arm64]
+    uses: ./.github/workflows/release-target.yml
+    with:
+      label: Windows arm64
+      runner: ubuntu-24.04
+      verify_runner: windows-11-arm
+      platform: win
+      target: nsis
+      arch: arm64
+      rust_target: aarch64-pc-windows-msvc
+      cli_archive: true
+      version: ${{ needs.preflight.outputs.version }}
+      stage: ${{ github.ref_name }}
+
+  publish:
+    name: Publish
+    needs: [preflight, mac_arm64, mac_x64, linux_x64, linux_arm64, win_x64, win_arm64]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@t3tools/scripts...
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: desktop-*
+          merge-multiple: true
+          path: release-assets
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: cli-*
+          merge-multiple: true
+          path: release-assets
+
+      # Installers and the SSH runner verify archives against this file.
+      - name: Write CLI archive checksums
+        run: |
+          set -euo pipefail
+          cd release-assets
+          shopt -s nullglob
+          # Desktop zips (macOS update feed) share the fwai- prefix; CLI archives carry an OS key.
+          archives=("fwai-$VERSION"-darwin-*.tar.gz "fwai-$VERSION"-linux-*.tar.gz "fwai-$VERSION"-win32-*.zip)
+          [[ ${#archives[@]} -eq 5 ]] || { echo "::error::expected 5 CLI archives, got: ${archives[*]}"; exit 1; }
+          sha256sum "${archives[@]}" > SHA256SUMS
+          cat SHA256SUMS
+
+      # A latest*.yml on a pre-release would let prod installs update onto a staging build.
+      - name: Refuse updater metadata on staging
+        if: github.ref_name == 'staging'
+        run: |
+          shopt -s nullglob
+          files=(release-assets/*.yml release-assets/*.blockmap)
+          [[ ${#files[@]} -eq 0 ]] || { echo "::error::staging release carries updater files: ${files[*]}"; exit 1; }
+
+      # electron-updater reads one manifest per platform and picks the entry for its arch.
+      - name: Merge updater manifests
+        if: github.ref_name == 'prod'
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for x64 in release-assets/*-mac-x64.yml; do
+            node scripts/merge-update-manifests.ts --platform mac "${x64%-x64.yml}.yml" "$x64"
+            rm -f "$x64"
+          done
+          for x64 in release-assets/*-win-x64.yml; do
+            arm64="${x64%-x64.yml}-arm64.yml"
+            node scripts/merge-update-manifests.ts --platform win "$x64" "$arm64" "${x64%-win-x64.yml}.yml"
+            rm -f "$x64" "$arm64"
+          done
+          ls release-assets/*.yml
+          [[ -f release-assets/latest-mac.yml && -f release-assets/latest.yml && -f release-assets/latest-linux.yml ]] ||
+            { echo "::error::missing an updater manifest"; exit 1; }
+
+      - name: Publish release
+        run: |
+          set -euo pipefail
+          source_line="$(git log -1 --format=%b | sed -n 's/^Source: //p')"
+          flags=(--latest)
+          if [[ "$GITHUB_REF_NAME" == staging ]]; then
+            flags=(--prerelease --latest=false)
+            notes="Staging build: talks to the staging gateway and relay and installs beside the released app. Never offered as an update. Built from ${source_line:-$GITHUB_SHA}."
+          else
+            notes="Built from ${source_line:-$GITHUB_SHA}."
+          fi
+          gh release create "v$VERSION" release-assets/* -R "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title "fwai $VERSION" --notes "$notes" "${flags[@]}"
+
+      # Old prod releases stay: each shipped app downloads its own CLI version onto SSH hosts.
+      - name: Keep the newest 5 staging builds
+        if: github.ref_name == 'staging'
+        run: |
+          gh release list -R "$GITHUB_REPOSITORY" --limit 200 --json tagName,isPrerelease \
+            --jq '.[] | select(.isPrerelease and (.tagName | test("-preview\\."))) | .tagName' |
+            tail -n +6 |
+            while read -r tag; do gh release delete "$tag" -R "$GITHUB_REPOSITORY" --yes --cleanup-tag; done

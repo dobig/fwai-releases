@@ -1,0 +1,8 @@
+{
+  "uuid": "snap-shot@fwaii.com",
+  "name": "fwai SnapShots",
+  "description": "Allows fwai to capture the focused window, identify it for optional accessibility text, and animate it into fwai. Disable this extension to revoke access.",
+  "shell-version": ["45", "46", "47", "48", "49", "50", "51"],
+  "version": 3,
+  "url": "https://github.com/dobig/fwai-releases"
+}
