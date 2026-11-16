@@ -787,6 +787,14 @@ const enrichProjectShells = Effect.fn("ws.orchestrationV2.enrichProjectShells")(
     ),
 );
 
+type ThreadResumeSnapshotReason =
+  | "initial"
+  | "cursor-ahead"
+  | "event-limit"
+  | "raw-payload-limit"
+  | "recreated"
+  | "encoded-limit";
+
 export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subscribeThread")(
   function* (input: {
     readonly threadId: ThreadId;
@@ -807,6 +815,15 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
     yield* Effect.annotateCurrentSpan({
       "orchestration_v2.thread_id": input.threadId,
     });
+    // The snapshot runs in a child span; resume attributes still belong on this one.
+    const subscribeSpan = yield* Effect.option(Effect.currentSpan);
+    const annotateResume = (attributes: Readonly<Record<string, string | number>>) =>
+      Effect.sync(() => {
+        if (Option.isNone(subscribeSpan)) return;
+        for (const [key, value] of Object.entries(attributes)) {
+          subscribeSpan.value.attribute(`orchestration_v2.resume.${key}`, value);
+        }
+      });
     yield* threadManagement.ensureLegacyTranscript(input.threadId).pipe(
       Effect.mapError(
         (cause) =>
@@ -874,7 +891,9 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
         ? Stream.make({ kind: "synchronized" as const })
         : Stream.empty;
 
-    const snapshotThenLive = Effect.fn("ws.orchestrationV2.threadSnapshotThenLive")(function* () {
+    const snapshotThenLive = Effect.fn("ws.orchestrationV2.threadSnapshotThenLive")(function* (
+      reason: ThreadResumeSnapshotReason,
+    ) {
       const useBoundedSnapshot = shouldUseBoundedThreadSnapshot(input);
       const snapshot = yield* (
         useBoundedSnapshot
@@ -909,6 +928,16 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
               projection: dedupeBodies ? dedupeSnapshotBodies(projection) : projection,
             };
           })();
+      // Only resume fallbacks pay for measuring: a first open is a snapshot by design.
+      yield* annotateResume(
+        reason === "initial"
+          ? { mode: "initial" }
+          : {
+              mode: "snapshot",
+              reason,
+              snapshot_bytes: threadReplayEncodedBytes([snapshotItem]),
+            },
+      );
       return withLiveDedupe(
         Stream.concat(
           Stream.concat(rpcInitialItems([snapshotItem]), completionMarker),
@@ -929,8 +958,9 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
             }),
         ),
       );
+      yield* annotateResume({ after_sequence: input.afterSequence, high_water: highWater });
       if (input.afterSequence > highWater) {
-        return yield* snapshotThenLive();
+        return yield* snapshotThenLive("cursor-ahead");
       }
       const stats = yield* applicationEvents
         .getAgentReplayStats({
@@ -949,12 +979,17 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
               }),
           ),
         );
+      // The count query stops at THREAD_RESUME_MAX_REPLAY_EVENTS + 1.
+      yield* annotateResume({
+        event_count: stats.eventCount,
+        raw_payload_bytes: stats.rawPayloadBytes,
+      });
       // Bound stored and projected payload bytes separately; neither bounds process memory.
-      if (
-        stats.eventCount > THREAD_RESUME_MAX_REPLAY_EVENTS ||
-        !isThreadReplayRawPayloadSafe(stats.rawPayloadBytes)
-      ) {
-        return yield* snapshotThenLive();
+      if (stats.eventCount > THREAD_RESUME_MAX_REPLAY_EVENTS) {
+        return yield* snapshotThenLive("event-limit");
+      }
+      if (!isThreadReplayRawPayloadSafe(stats.rawPayloadBytes)) {
+        return yield* snapshotThenLive("raw-payload-limit");
       }
       if (stats.hasCreateEvent) {
         const shell = yield* threadManagement.getThreadShell(input.threadId).pipe(
@@ -968,18 +1003,24 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
           ),
         );
         // Retained creation events may describe deleted threads; replace replay only if a snapshot exists.
-        if (shell !== null) return yield* snapshotThenLive();
+        if (shell !== null) return yield* snapshotThenLive("recreated");
       }
       const replay = yield* loadReplayThrough(input.afterSequence, highWater);
+      const replayBytes = threadReplayEncodedBytes(replay);
       const plan = decideThreadResume({
         afterSequence: input.afterSequence,
         highWater,
         replayEventCount: replay.length,
-        replayEncodedBytes: threadReplayEncodedBytes(replay),
+        replayEncodedBytes: replayBytes,
       });
       if (plan.mode === "snapshot") {
-        return yield* snapshotThenLive();
+        return yield* snapshotThenLive("encoded-limit");
       }
+      yield* annotateResume({
+        mode: "replay",
+        replay_events: replay.length,
+        replay_bytes: replayBytes,
+      });
       return withLiveDedupe(
         Stream.concat(
           Stream.concat(rpcInitialItems(replay), completionMarker),
@@ -988,7 +1029,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
       );
     }
 
-    return yield* snapshotThenLive();
+    return yield* snapshotThenLive("initial");
   },
 );
 

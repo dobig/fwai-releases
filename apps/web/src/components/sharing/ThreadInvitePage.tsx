@@ -1,3 +1,5 @@
+import { useAtomValue } from "@effect/atom-react";
+import { managedRelaySessionAtom } from "@t3tools/client-runtime/relay";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
@@ -38,6 +40,8 @@ export function ThreadInvitePage({ token }: { readonly token: string }) {
   const acceptInvite = useAtomCommand(sharedThreads.acceptInvite, { reportFailure: false });
   const [state, setState] = useState<InviteState>({ status: "loading" });
   const [joining, setJoining] = useState(false);
+  // The relay session attaches a moment after sign-in, so a link opened cold must wait for it.
+  const accountId = useAtomValue(managedRelaySessionAtom)?.accountId ?? null;
 
   const load = useEffectEvent((isActive: () => boolean) => {
     void previewInvite({ token }).then((result) => {
@@ -54,15 +58,15 @@ export function ThreadInvitePage({ token }: { readonly token: string }) {
     });
   });
 
-  // oxlint-disable-next-line t3code/react-effect-budget -- reads the invite from the relay when the page opens
+  // oxlint-disable-next-line t3code/react-effect-budget -- reads the invite from the relay once the account is signed in
   useEffect(() => {
+    if (accountId === null) return;
     let active = true;
     load(() => active);
     return () => {
       active = false;
     };
-    // The route keys this page by token, so one read per mount is the right count.
-  }, []);
+  }, [accountId]);
 
   const join = async (preview: RelayThreadInvitePreview) => {
     setJoining(true);

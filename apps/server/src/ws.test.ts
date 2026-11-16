@@ -11,6 +11,7 @@ import {
   WsServerRefreshProvidersRpc,
   WsSubscribeServerConfigRpc,
   type OrchestrationV2StoredEvent,
+  type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadShell,
   type OrchestrationProjectShell,
   type ServerConfig,
@@ -25,6 +26,7 @@ import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import * as Tracer from "effect/Tracer";
 import { Headers } from "effect/http";
 import { RpcGroup, RpcMessage, RpcServer } from "effect/rpc";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -112,6 +114,7 @@ import * as EventStore from "./orchestration-v2/EventStore.ts";
 import * as ProjectionMaintenance from "./orchestration-v2/ProjectionMaintenance.ts";
 import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
+import { THREAD_RESUME_MAX_REPLAY_EVENTS } from "./orchestration-v2/ThreadStream.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as OrchestrationEventStore from "./persistence/OrchestrationEventStore.ts";
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
@@ -806,6 +809,113 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
     ),
     Effect.scoped,
   ),
+);
+
+const insertResumeMessages = Effect.fn("test.insertResumeMessages")(function* (
+  threadId: ThreadId,
+  count: number,
+) {
+  const sql = yield* SqlClient.SqlClient;
+  const now = "2026-10-13T00:00:00.000Z";
+  const sequences: number[] = [];
+  for (let version = 0; version < count; version += 1) {
+    const [row] = yield* sql<{ sequence: number }>`
+      INSERT INTO orchestration_events (
+        event_id, aggregate_kind, stream_id, stream_version, event_type,
+        occurred_at, actor_kind, payload_json, metadata_json, application_event_version
+      ) VALUES (
+        ${`${threadId}:${version}`}, 'thread', ${threadId}, ${version}, 'message.updated',
+        ${now}, 'server', ${JSON.stringify({
+          createdBy: "user",
+          creationSource: "web",
+          id: `message:${version}`,
+          threadId,
+          runId: null,
+          nodeId: null,
+          role: "user",
+          text: `message ${version}`,
+          attachments: [],
+          streaming: false,
+          createdAt: now,
+          updatedAt: now,
+        })}, '{}', 2
+      ) RETURNING sequence
+    `;
+    sequences.push(row!.sequence);
+  }
+  return sequences;
+});
+
+// Records the resume attributes of one subscribeThread call.
+const subscribeThreadResume = (input: { threadId: ThreadId; afterSequence?: number }) => {
+  const spans: Tracer.NativeSpan[] = [];
+  const tracer = Tracer.make({
+    span: (options) => {
+      const span = new Tracer.NativeSpan(options);
+      spans.push(span);
+      return span;
+    },
+  });
+  return subscribeOrchestrationV2Thread(input).pipe(
+    Effect.provideService(Tracer.Tracer, tracer),
+    Effect.provideService(ThreadManagement.ThreadManagementService, {
+      ensureLegacyTranscript: () => Effect.void,
+      streamStoredEventsFrom: () => Stream.never,
+      getThreadSnapshot: () =>
+        Effect.succeed({
+          snapshotSequence: 0,
+          projection: {
+            contextHandoffs: [],
+            turnItems: [],
+            visibleTurnItems: [],
+          } as unknown as OrchestrationV2ThreadProjection,
+        }),
+    } as unknown as ThreadManagement.ThreadManagementService["Service"]),
+    Effect.map(() => {
+      const span = spans.find(
+        (candidate) => candidate.name === "ws.orchestrationV2.subscribeThread",
+      );
+      return Object.fromEntries(
+        [...(span?.attributes ?? [])].flatMap(([key, value]) =>
+          key.startsWith("orchestration_v2.resume.")
+            ? [[key.slice("orchestration_v2.resume.".length), value]]
+            : [],
+        ),
+      );
+    }),
+  );
+};
+
+it.effect("thread subscribe records how it resumed", () =>
+  Effect.gen(function* () {
+    const replayThread = ThreadId.make("thread:resume-replay");
+    const [first, last] = yield* insertResumeMessages(replayThread, 2);
+    const replay = yield* subscribeThreadResume({
+      threadId: replayThread,
+      afterSequence: first! - 1,
+    });
+    assert.deepInclude(replay, {
+      mode: "replay",
+      after_sequence: first! - 1,
+      high_water: last,
+      event_count: 2,
+      replay_events: 2,
+    });
+    assert.isAbove(replay.replay_bytes as number, 0);
+
+    const longThread = ThreadId.make("thread:resume-long");
+    const [start] = yield* insertResumeMessages(longThread, THREAD_RESUME_MAX_REPLAY_EVENTS + 2);
+    const snapshot = yield* subscribeThreadResume({ threadId: longThread, afterSequence: start! });
+    assert.deepInclude(snapshot, {
+      mode: "snapshot",
+      reason: "event-limit",
+      event_count: THREAD_RESUME_MAX_REPLAY_EVENTS + 1,
+    });
+    assert.isAbove(snapshot.snapshot_bytes as number, 0);
+
+    const initial = yield* subscribeThreadResume({ threadId: longThread });
+    assert.deepEqual(initial, { mode: "initial" });
+  }).pipe(Effect.provide(ReplayTestLayer)),
 );
 
 // Compaction keeps the oldest and newest event per message, so a cursor older
