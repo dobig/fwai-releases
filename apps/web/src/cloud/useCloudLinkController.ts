@@ -1,0 +1,252 @@
+import { useAtomValue } from "@effect/atom-react";
+import { findErrorTraceId } from "@t3tools/client-runtime/errors";
+import {
+  EnvironmentId,
+  AuthRelayReadScope,
+  AuthRelayWriteScope,
+  type EnvironmentCloudLinkStateResult,
+} from "@t3tools/contracts";
+import type { RelayManagedEndpointProviderKind } from "@t3tools/contracts/relay";
+import {
+  isAtomCommandInterrupted,
+  settlePromise,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import { useState } from "react";
+
+import { toastManager } from "../components/ui/toast";
+import { relayEnvironmentDiscovery } from "../state/relay";
+import { readEnvironmentScope } from "../state/session";
+import { useAtomCommand } from "../state/use-atom-command";
+import {
+  linkPrimaryEnvironment as linkPrimaryEnvironmentAtom,
+  unlinkPrimaryEnvironment as unlinkPrimaryEnvironmentAtom,
+  updatePrimaryEnvironmentPreferences as updatePrimaryEnvironmentPreferencesAtom,
+} from "./linkEnvironmentAtoms";
+import { readCachedPrimaryCloudLinkState, usePrimaryCloudLinkState } from "./primaryCloudLinkState";
+import { resolveCloudPublicConfig } from "./publicConfig";
+import { useFwaiAuth } from "../fwaiAccount/useFwaiAccount";
+
+export interface CloudLinkDesiredState {
+  readonly managedTunnel: boolean;
+  readonly publish: boolean;
+  readonly holdWebhooksWhileOffline?: boolean;
+  /** fwai: automatic enabling installs the relay client without asking. */
+  readonly installRelayClientWithoutConfirmation?: boolean;
+}
+
+// fwai: staging and prod builds share one environment, so its link may belong to the other stage's relay.
+export function isLinkedToConfiguredRelay(
+  linkState: Pick<EnvironmentCloudLinkStateResult, "relayUrl">,
+  configuredRelayUrl: string | null = resolveCloudPublicConfig().relayUrl,
+) {
+  if (!linkState.relayUrl || !configuredRelayUrl) return true;
+  return new URL(linkState.relayUrl).origin === new URL(configuredRelayUrl).origin;
+}
+
+// Require managed discovery: stale tunnel config after a publish-only switch causes endpoint_provider_not_managed.
+function isManagedTunnelActive(
+  linkState: EnvironmentCloudLinkStateResult,
+  relayProviderKind: RelayManagedEndpointProviderKind | undefined,
+) {
+  const localManagedTunnel = linkState.managedTunnelActive ?? linkState.linked;
+  return (
+    linkState.linkRevoked !== true &&
+    isLinkedToConfiguredRelay(linkState) &&
+    localManagedTunnel &&
+    (relayProviderKind === undefined || relayProviderKind === "cloudflare_tunnel")
+  );
+}
+
+export function useCloudLinkController() {
+  const { getToken, isSignedIn } = useFwaiAuth();
+  const refreshRelayEnvironments = useAtomCommand(relayEnvironmentDiscovery.refresh, {
+    reportFailure: false,
+  });
+  const linkPrimaryEnvironment = useAtomCommand(linkPrimaryEnvironmentAtom, {
+    reportFailure: false,
+  });
+  const unlinkPrimaryEnvironment = useAtomCommand(unlinkPrimaryEnvironmentAtom, {
+    reportFailure: false,
+  });
+  const updatePrimaryEnvironmentPreferences = useAtomCommand(
+    updatePrimaryEnvironmentPreferencesAtom,
+    { reportFailure: false },
+  );
+  const primaryCloudLinkState = usePrimaryCloudLinkState();
+  const relayEnvironments = useAtomValue(relayEnvironmentDiscovery.stateValueAtom).environments;
+  const primaryEnvironmentId = primaryCloudLinkState.target?.environmentId;
+  const relayProviderKind = primaryEnvironmentId
+    ? relayEnvironments.get(primaryEnvironmentId)?.environment.endpoint.providerKind
+    : undefined;
+  const [operationError, setOperationError] = useState<string | null>(null);
+
+  const reportUpdateFailure = (cause: unknown) => {
+    const message =
+      cause instanceof Error ? cause.message : "Could not update fwai Connect access.";
+    const traceId = findErrorTraceId(cause);
+    console.error("[t3-connect] Could not update fwai Connect", { message, traceId, cause });
+    setOperationError(traceId ? `${message} Trace ID: ${traceId}` : message);
+    toastManager.add({
+      type: "error",
+      title: "Could not update fwai Connect",
+      description: message,
+      data: traceId
+        ? {
+            secondaryActionProps: {
+              children: "Copy trace ID",
+              onClick: () => void navigator.clipboard?.writeText(traceId),
+            },
+          }
+        : undefined,
+    });
+  };
+
+  const linkData = primaryCloudLinkState.data;
+  const linkRevoked = linkData?.linkRevoked ?? false;
+  const managedTunnelActive = linkData ? isManagedTunnelActive(linkData, relayProviderKind) : false;
+  const managedTunnelOutOfSync =
+    linkData !== null && !managedTunnelActive && isManagedTunnelActive(linkData, undefined);
+  const publishAgentActivity = primaryCloudLinkState.data?.publishAgentActivity ?? false;
+  const holdWebhooksWhileOffline = primaryCloudLinkState.data?.holdWebhooksWhileOffline ?? false;
+  const linked =
+    !linkRevoked &&
+    (linkData?.linked ?? false) &&
+    (linkData === null || isLinkedToConfiguredRelay(linkData));
+
+  const reconcileCloudState = async (desired: CloudLinkDesiredState): Promise<boolean> => {
+    setOperationError(null);
+    const target = primaryCloudLinkState.target;
+    if (!target) {
+      reportUpdateFailure(new Error("Local environment is not ready yet."));
+      return false;
+    }
+    const environmentId = EnvironmentId.make(target.environmentId);
+    const canManageLink = () => {
+      if (
+        !readEnvironmentScope(environmentId, AuthRelayReadScope) ||
+        !readEnvironmentScope(environmentId, AuthRelayWriteScope)
+      ) {
+        reportUpdateFailure(
+          new Error("This connection needs permission to view and manage fwai Connect settings."),
+        );
+        return false;
+      }
+      return true;
+    };
+    const readLinkState = () => {
+      const state = readCachedPrimaryCloudLinkState(target);
+      if (state === null) {
+        reportUpdateFailure(new Error("Wait until the current fwai Connect settings can be read."));
+      }
+      return state;
+    };
+    if (!canManageLink()) return false;
+    const wantsLink = desired.managedTunnel || desired.publish;
+    if (wantsLink && readLinkState() === null) return false;
+    const tokenResult = await settlePromise(() => getToken());
+    if (!canManageLink()) return false;
+
+    // A failed mutation may have partially applied, so refresh server state on every exit.
+    if (!wantsLink) {
+      // Unlink needs no relay token; failed token reads must still allow it.
+      const unlinkResult = await unlinkPrimaryEnvironment({
+        target,
+        accountToken: tokenResult._tag === "Success" ? (tokenResult.value ?? null) : null,
+      });
+      if (unlinkResult._tag === "Failure") {
+        if (!isAtomCommandInterrupted(unlinkResult)) {
+          reportUpdateFailure(squashAtomCommandFailure(unlinkResult));
+        }
+        primaryCloudLinkState.refresh();
+        return false;
+      }
+    } else {
+      const currentLinkState = readLinkState();
+      if (currentLinkState === null) return false;
+      if (tokenResult._tag === "Failure") {
+        reportUpdateFailure(squashAtomCommandFailure(tokenResult));
+        return false;
+      }
+      const accountToken = tokenResult.value;
+      if (!accountToken) {
+        reportUpdateFailure(new Error("Sign in to fwai Connect before enabling this."));
+        return false;
+      }
+      if (currentLinkState.linked && !isLinkedToConfiguredRelay(currentLinkState)) {
+        // The server refuses a link for another account, and the other relay's link can only be
+        // dropped locally: this stage's token cannot revoke it there.
+        const unlinkResult = await unlinkPrimaryEnvironment({ target, accountToken: null });
+        if (unlinkResult._tag === "Failure") {
+          if (!isAtomCommandInterrupted(unlinkResult)) {
+            reportUpdateFailure(squashAtomCommandFailure(unlinkResult));
+          }
+          primaryCloudLinkState.refresh();
+          return false;
+        }
+      }
+      const currentManagedTunnel = isManagedTunnelActive(currentLinkState, relayProviderKind);
+      if (
+        !currentLinkState.linked ||
+        !isLinkedToConfiguredRelay(currentLinkState) ||
+        currentLinkState.linkRevoked === true ||
+        currentManagedTunnel !== desired.managedTunnel
+      ) {
+        const linkResult = await linkPrimaryEnvironment({
+          target,
+          accountToken,
+          mode: desired.managedTunnel ? "managed" : "publish_only",
+          ...(desired.installRelayClientWithoutConfirmation
+            ? { installRelayClientWithoutConfirmation: true }
+            : {}),
+        });
+        if (linkResult._tag === "Failure") {
+          if (!isAtomCommandInterrupted(linkResult)) {
+            reportUpdateFailure(squashAtomCommandFailure(linkResult));
+          }
+          primaryCloudLinkState.refresh();
+          return false;
+        }
+      }
+      if (!canManageLink() || readLinkState() === null) {
+        primaryCloudLinkState.refresh();
+        return false;
+      }
+      const prefResult = await updatePrimaryEnvironmentPreferences({
+        target,
+        publishAgentActivity: desired.publish,
+        ...(desired.holdWebhooksWhileOffline === undefined
+          ? {}
+          : { holdWebhooksWhileOffline: desired.holdWebhooksWhileOffline }),
+      });
+      if (prefResult._tag === "Failure") {
+        if (!isAtomCommandInterrupted(prefResult)) {
+          reportUpdateFailure(squashAtomCommandFailure(prefResult));
+        }
+        primaryCloudLinkState.refresh();
+        return false;
+      }
+    }
+
+    primaryCloudLinkState.refresh();
+    const refreshResult = await refreshRelayEnvironments();
+    if (refreshResult._tag === "Failure" && !isAtomCommandInterrupted(refreshResult)) {
+      reportUpdateFailure(squashAtomCommandFailure(refreshResult));
+      return false;
+    }
+    return true;
+  };
+
+  return {
+    isSignedIn,
+    linkState: primaryCloudLinkState,
+    linked,
+    linkRevoked,
+    managedTunnelActive,
+    managedTunnelOutOfSync,
+    publishAgentActivity,
+    holdWebhooksWhileOffline,
+    operationError,
+    reconcileCloudState,
+  };
+}

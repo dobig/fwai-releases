@@ -1,0 +1,30 @@
+/// <reference types="vite-plus/client" />
+
+import type { DesktopBridge } from "@t3tools/contracts";
+
+interface ImportMetaEnv {
+  readonly VITE_HTTP_URL: string;
+  readonly VITE_WS_URL: string;
+  readonly VITE_HOSTED_APP_URL: string;
+  readonly VITE_HOSTED_APP_CHANNEL: string;
+  readonly VITE_RELEASE_CHANNEL: string;
+  readonly VITE_T3CODE_FWAI_GATEWAY_URL: string;
+  readonly VITE_T3CODE_FWAI_CLIENT_ID: string;
+  /** fwai: picks the desktop app a Codex sign-in hands off to (`fwai` or `fwai-staging`). */
+  readonly VITE_T3CODE_FWAI_STAGE: string;
+  readonly VITE_RELAY_OTLP_TRACES_URL: string;
+  readonly VITE_RELAY_OTLP_TRACES_DATASET: string;
+  readonly VITE_RELAY_OTLP_TRACES_TOKEN: string;
+  readonly T3CODE_DESKTOP_UPDATE_REPOSITORY: string;
+  readonly APP_VERSION: string;
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
+}
+
+declare global {
+  interface Window {
+    desktopBridge?: DesktopBridge;
+  }
+}
