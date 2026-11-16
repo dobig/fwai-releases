@@ -2,7 +2,8 @@ name: Release
 
 # dobig/fwai_code publishes its app/CLI code to this repository's branches
 # (scripts/fwai-sync-release-repo.sh there). A push to `staging` builds every
-# platform against the staging services as a pre-release `X.Y.Z-preview.*`;
+# platform against the staging services as a draft release `X.Y.Z-preview.*`
+# (visible to collaborators only);
 # a push to `prod` builds the prod release `vX.Y.Z` and marks it latest.
 
 on:
@@ -240,7 +241,7 @@ jobs:
           sha256sum "${archives[@]}" > SHA256SUMS
           cat SHA256SUMS
 
-      # A latest*.yml on a pre-release would let prod installs update onto a staging build.
+      # A latest*.yml on a staging release would let prod installs update onto a staging build.
       - name: Refuse updater metadata on staging
         if: github.ref_name == 'staging'
         run: |
@@ -273,8 +274,9 @@ jobs:
           source_line="$(git log -1 --format=%b | sed -n 's/^Source: //p')"
           flags=(--latest)
           if [[ "$GITHUB_REF_NAME" == staging ]]; then
-            flags=(--prerelease --latest=false)
-            notes="Staging build: talks to the staging gateway and relay and installs beside the released app. Never offered as an update. Built from ${source_line:-$GITHUB_SHA}."
+            # Drafts are visible to collaborators only; their assets need a GitHub login.
+            flags=(--draft)
+            notes="Staging build: talks to the staging gateway and relay and installs beside the released app. Built from ${source_line:-$GITHUB_SHA}."
           else
             notes="Built from ${source_line:-$GITHUB_SHA}."
           fi
@@ -285,7 +287,7 @@ jobs:
       - name: Keep the newest 5 staging builds
         if: github.ref_name == 'staging'
         run: |
-          gh release list -R "$GITHUB_REPOSITORY" --limit 200 --json tagName,isPrerelease \
-            --jq '.[] | select(.isPrerelease and (.tagName | test("-preview\\."))) | .tagName' |
+          gh release list -R "$GITHUB_REPOSITORY" --limit 200 --json tagName,isDraft \
+            --jq '.[] | select(.isDraft and (.tagName | test("-preview\\."))) | .tagName' |
             tail -n +6 |
-            while read -r tag; do gh release delete "$tag" -R "$GITHUB_REPOSITORY" --yes --cleanup-tag; done
+            while read -r tag; do gh release delete "$tag" -R "$GITHUB_REPOSITORY" --yes; done
