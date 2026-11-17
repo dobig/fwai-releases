@@ -12,9 +12,11 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
 import { CheckIcon, LockIcon, MinusIcon, ShieldCheckIcon } from "lucide-react";
+import { useAtomValue } from "@effect/atom-react";
 import { useId, useRef, useState, type FormEvent } from "react";
 
 import { serverEnvironment } from "../../state/server";
+import { isSharedEnvironmentAtom } from "../../state/sharing";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -27,6 +29,17 @@ export function SecretRequestCard(props: {
 }) {
   const { item } = props;
   const display = secretRequestDisplay(item, props.visibility);
+  // Secrets are saved on the owner's machine, so only the owner answers.
+  const sharedEnvironment = useAtomValue(isSharedEnvironmentAtom(props.environmentId));
+  if (display.kind === "pending" && sharedEnvironment) {
+    return (
+      <WorkLogRow
+        data-v2-item-type={item.type}
+        icon={<LockIcon className="size-3.5 text-icon-muted" aria-hidden />}
+        label={<>{item.label} · Waiting for the owner</>}
+      />
+    );
+  }
   if (display.kind === "answered" || display.kind === "pending-elsewhere") {
     const Icon =
       display.kind === "pending-elsewhere"

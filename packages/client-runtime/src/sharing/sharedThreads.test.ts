@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   groupSharedThreads,
+  runsStartedBy,
   sharedThreadRole,
   threadCapabilities,
   withoutRemovedThreads,
@@ -67,11 +68,13 @@ describe("threadCapabilities", () => {
     });
   });
 
-  it("lets a collaborator only send messages, and a viewer or unknown role only read", () => {
+  it("lets a collaborator send messages and answer questions, and a viewer or unknown role only read", () => {
     const collaborator = threadCapabilities({ sharedEnvironment: true, role: "collaborator" });
     expect(collaborator.sendMessages).toBe(true);
+    expect(collaborator.answerQuestions).toBe(true);
     for (const key of [
       "respondToRuntime",
+      "answerApprovals",
       "manageThread",
       "terminal",
       "files",
@@ -86,6 +89,21 @@ describe("threadCapabilities", () => {
       false,
     );
     expect(threadCapabilities({ sharedEnvironment: true, role: null }).sendMessages).toBe(false);
+    expect(threadCapabilities({ sharedEnvironment: true, role: "viewer" }).answerQuestions).toBe(
+      false,
+    );
+  });
+
+  it("leaves approvals to the owner unless the collaborator's share skips them", () => {
+    const capabilities = (requireApproval: boolean | undefined) =>
+      threadCapabilities({ sharedEnvironment: true, role: "collaborator", requireApproval });
+    expect(capabilities(false).answerApprovals).toBe(true);
+    expect(capabilities(true).answerApprovals).toBe(false);
+    expect(capabilities(undefined).answerApprovals).toBe(false);
+    expect(
+      threadCapabilities({ sharedEnvironment: true, role: "viewer", requireApproval: false })
+        .answerApprovals,
+    ).toBe(false);
   });
 });
 
@@ -122,5 +140,20 @@ describe("share targets", () => {
     expect(describeShareStatus({ status: "proposed" })).toBe(
       "Proposed by an agent, waiting for you",
     );
+  });
+});
+
+describe("runsStartedBy", () => {
+  it("finds the runs the account's own messages started", () => {
+    const projection = {
+      runs: [
+        { id: "run_mine", userMessageId: "msg_mine" },
+        { id: "run_owner", userMessageId: "msg_owner" },
+      ],
+      messages: [{ id: "msg_mine", authorAccountId: "user_me" }, { id: "msg_owner" }],
+    } as unknown as Parameters<typeof runsStartedBy>[0];
+    expect([...runsStartedBy(projection, "user_me")]).toEqual(["run_mine"]);
+    expect(runsStartedBy(projection, null).size).toBe(0);
+    expect(runsStartedBy(undefined, "user_me").size).toBe(0);
   });
 });

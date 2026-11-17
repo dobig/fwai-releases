@@ -1,14 +1,14 @@
 name: Release
 
 # dobig/fwai_code publishes its app/CLI code to this repository's branches
-# (scripts/fwai-sync-release-repo.sh there). A push to `staging` builds every
-# platform against the staging services as a draft release `X.Y.Z-preview.*`
-# (visible to collaborators only);
-# a push to `prod` builds the prod release `vX.Y.Z` and marks it latest.
+# (scripts/fwai-sync-release-repo.sh there). A push to `prod` builds the prod
+# release `vX.Y.Z` and marks it latest. Staging builds only on request: run
+# this workflow on `staging` by hand to get a draft release `X.Y.Z-preview.*`
+# against the staging services (visible to collaborators only).
 
 on:
   push:
-    branches: [staging, prod]
+    branches: [prod]
   workflow_dispatch:
 
 permissions:

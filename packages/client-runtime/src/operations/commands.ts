@@ -183,6 +183,8 @@ export interface StartThreadTurnInput extends ThreadCommandInput {
 
 export interface InterruptThreadTurnInput extends ThreadCommandInput {
   readonly runId?: RunId;
+  /** Defaults to true. A collaborator's stop leaves the owner's queue running. */
+  readonly holdQueue?: boolean;
   readonly subagentId?: NodeId;
   readonly turnId?: string;
 }
@@ -915,7 +917,7 @@ export const interruptThreadTurn = Effect.fn("EnvironmentCommands.interruptThrea
     commandId: yield* allocateCommandId(input),
     threadId,
     runId,
-    holdQueue: true,
+    holdQueue: input.holdQueue ?? true,
   });
 });
 
