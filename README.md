@@ -21,4 +21,4 @@ irm https://raw.githubusercontent.com/dobig/fwai-releases/prod/scripts/install.p
 
 Linux hosts need glibc and `libatomic1`. See [docs/user](docs/user/install.md) for more.
 
-This repository holds the source the releases are built from. It is published from our private repository on every release, so pull requests here are not merged; open an issue instead. Branches: `prod` is the latest release, `staging` the code of the latest staging build (staging releases are drafts for maintainers), `main` the latest development snapshot.
+This repository holds the source the releases are built from. It is published from our private repository on every release, so pull requests here are not merged; open an issue instead. Branches: `prod` is the latest release, `staging` the code on our staging services (staging builds are made on request, as drafts for maintainers), `main` the latest development snapshot.

@@ -1,4 +1,10 @@
-import type { EnvironmentId, ThreadId, ThreadShareRole } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  OrchestrationV2ThreadProjection,
+  RunId,
+  ThreadId,
+  ThreadShareRole,
+} from "@t3tools/contracts";
 import type { RelaySharedThread } from "@t3tools/contracts/relay";
 
 export interface SharedThreadGroups {
@@ -36,16 +42,26 @@ export function withoutRemovedThreads(
   return kept.length === threads.length ? threads : kept;
 }
 
+/** The relay's entry for a thread shared with the account; null when it is not shared with them. */
+export function findSharedThread(
+  threads: ReadonlyArray<RelaySharedThread>,
+  environmentId: EnvironmentId,
+  threadId: string,
+): RelaySharedThread | null {
+  return (
+    threads.find(
+      (thread) => thread.environmentId === environmentId && thread.threadId === threadId,
+    ) ?? null
+  );
+}
+
 /** The account's role in a thread, read from the relay's list; null when it is not shared with them. */
 export function sharedThreadRole(
   threads: ReadonlyArray<RelaySharedThread>,
   environmentId: EnvironmentId,
   threadId: string,
 ): ThreadShareRole | null {
-  return (
-    threads.find((thread) => thread.environmentId === environmentId && thread.threadId === threadId)
-      ?.role ?? null
-  );
+  return findSharedThread(threads, environmentId, threadId)?.role ?? null;
 }
 
 /**
@@ -55,8 +71,12 @@ export function sharedThreadRole(
  */
 export interface ThreadCapabilities {
   readonly sendMessages: boolean;
-  /** Approvals, user input answers, interrupting, steering: runtime responses are the owner's. */
+  /** Interrupting, steering, resuming a held queue: run control stays the owner's. */
   readonly respondToRuntime: boolean;
+  /** The agent's questions (user input requests). */
+  readonly answerQuestions: boolean;
+  /** Command, file and permission approvals: a collaborator's only when their share skips the owner. */
+  readonly answerApprovals: boolean;
   readonly manageThread: boolean;
   readonly terminal: boolean;
   readonly files: boolean;
@@ -69,6 +89,8 @@ export interface ThreadCapabilities {
 const OWNER_CAPABILITIES: ThreadCapabilities = Object.freeze({
   sendMessages: true,
   respondToRuntime: true,
+  answerQuestions: true,
+  answerApprovals: true,
   manageThread: true,
   terminal: true,
   files: true,
@@ -82,11 +104,16 @@ export function threadCapabilities(input: {
   readonly sharedEnvironment: boolean;
   /** The account's role in the thread; null when unknown, which grants only reading. */
   readonly role: ThreadShareRole | null;
+  /** From the relay's list; absent (an older relay) means the owner approves. */
+  readonly requireApproval?: boolean | undefined;
 }): ThreadCapabilities {
   if (!input.sharedEnvironment) return OWNER_CAPABILITIES;
+  const collaborator = input.role === "collaborator";
   return {
-    sendMessages: input.role === "collaborator",
+    sendMessages: collaborator,
     respondToRuntime: false,
+    answerQuestions: collaborator,
+    answerApprovals: collaborator && input.requireApproval === false,
     manageThread: false,
     terminal: false,
     files: false,
@@ -95,4 +122,23 @@ export function threadCapabilities(input: {
     projects: false,
     share: false,
   };
+}
+
+/**
+ * Runs started by the account's own messages: the ones a collaborator may stop, edit or retry in
+ * someone else's thread (the environment checks the same through each message's author).
+ */
+export function runsStartedBy(
+  projection: Pick<OrchestrationV2ThreadProjection, "runs" | "messages"> | null | undefined,
+  accountId: string | null,
+): ReadonlySet<RunId> {
+  if (!projection || accountId === null) return new Set();
+  const ownMessageIds = new Set<string>(
+    projection.messages
+      .filter((message) => message.authorAccountId === accountId)
+      .map((message) => message.id),
+  );
+  return new Set(
+    projection.runs.filter((run) => ownMessageIds.has(run.userMessageId)).map((run) => run.id),
+  );
 }

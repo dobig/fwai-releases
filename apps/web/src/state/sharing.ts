@@ -1,7 +1,7 @@
 import { isSharedEnvironmentEntry } from "@t3tools/client-runtime/connection";
 import { createSharedThreadAtoms } from "@t3tools/client-runtime/state/sharing";
 import {
-  sharedThreadRole,
+  findSharedThread,
   threadCapabilities,
 } from "@t3tools/client-runtime/sharing/shared-threads";
 import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
@@ -38,12 +38,18 @@ export function readIsSharedEnvironment(environmentId: EnvironmentId): boolean {
 /** What the UI may offer on a thread; a shared environment refuses all but reading and messages. */
 export const threadCapabilitiesAtom = Atom.family((key: string) => {
   const [environmentId, threadId] = JSON.parse(key) as [EnvironmentId, string];
-  return Atom.make((get) =>
-    threadCapabilities({
+  return Atom.make((get) => {
+    const shared = findSharedThread(
+      get(sharedThreads.stateValueAtom).threads,
+      environmentId,
+      threadId,
+    );
+    return threadCapabilities({
       sharedEnvironment: get(isSharedEnvironmentAtom(environmentId)),
-      role: sharedThreadRole(get(sharedThreads.stateValueAtom).threads, environmentId, threadId),
-    }),
-  ).pipe(Atom.withLabel(`thread-capabilities:${key}`));
+      role: shared?.role ?? null,
+      requireApproval: shared?.requireApproval,
+    });
+  }).pipe(Atom.withLabel(`thread-capabilities:${key}`));
 });
 
 export const threadCapabilitiesKey = (ref: ScopedThreadRef) =>
