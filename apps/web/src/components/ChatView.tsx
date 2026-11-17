@@ -86,7 +86,11 @@ import {
   resolveWorkflowOpening,
   workflowOpeningParentThreadId,
 } from "@t3tools/client-runtime/state/subagentRuntime";
-import { threadSupportsProviderHandoff } from "@t3tools/client-runtime/state/thread-workflows";
+import { runsStartedBy } from "@t3tools/client-runtime/sharing/shared-threads";
+import {
+  resolveActiveThreadRun,
+  threadSupportsProviderHandoff,
+} from "@t3tools/client-runtime/state/thread-workflows";
 import { resolvePendingHandoff } from "@t3tools/client-runtime/handoff";
 import { HandoffRow } from "./chat/V2LifecycleRow";
 import {
@@ -108,6 +112,7 @@ import { resolveThreadReferenceCopyTarget } from "@t3tools/client-runtime/thread
 import { resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
 import { useAtomValue } from "@effect/atom-react";
 import { threadCapabilitiesAtom, threadCapabilitiesKey } from "~/state/sharing";
+import { useSignedInUserId } from "./sharing/colleagues";
 import { type SetStateAction, use, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { BackgroundThreadContext } from "./chat/backgroundThread";
 import { useLocation, useNavigate } from "@tanstack/react-router";
@@ -422,6 +427,7 @@ export default function ChatView(props: ChatViewProps) {
   );
   const canOperateThread = canOperateEnvironment && sharedThreadCapabilities.manageThread;
   const canSendMessages = canOperateEnvironment && sharedThreadCapabilities.sendMessages;
+  const signedInUserId = useSignedInUserId();
   const canOperateTerminal = useEnvironmentScope(environmentId, AuthTerminalOperateScope);
   const draftId = routeKind === "draft" ? props.draftId : null;
   const handleNewThread = useNewThreadHandler();
@@ -777,6 +783,15 @@ export default function ChatView(props: ChatViewProps) {
   const activeLatestRun = isServerThread ? serverLatestRun : (activeThread?.latestRun ?? null);
   const activeActivityRun = isServerThread ? serverActivityRun : (activeThread?.latestRun ?? null);
   const activeRuntime = isServerThread ? serverRuntime : (activeThread?.runtime ?? null);
+  // In someone else's shared thread, the runs this account started: the only ones it manages.
+  const ownRunIds = sharedThreadCapabilities.manageThread
+    ? null
+    : runsStartedBy(serverProjection, signedInUserId);
+  const ownActiveRunId = (() => {
+    if (ownRunIds === null || serverProjection === null) return null;
+    const run = resolveActiveThreadRun(serverProjection);
+    return run !== null && ownRunIds.has(run.id) ? run.id : null;
+  })();
   const hasHeldQueuedRuns =
     isServerThread &&
     serverProjection?.runs.some((run) => run.status === "queued" && run.queueHeld === true) ===
@@ -1753,18 +1768,27 @@ export default function ChatView(props: ChatViewProps) {
   };
   const focusComposerStable = useStableCallback(focusComposer);
   const canInterruptRunningThread =
-    canOperateThread && deriveCanInterruptRunningThread(activeThread !== undefined, activeRuntime);
+    (canOperateThread || (canSendMessages && ownActiveRunId !== null)) &&
+    deriveCanInterruptRunningThread(activeThread !== undefined, activeRuntime);
   const onInterrupt = async () => {
     if (
       !activeThread ||
       !readEnvironmentScope(activeThread.environmentId, AuthOrchestrationOperateScope)
     )
       return;
+    if (ownRunIds !== null && ownActiveRunId === null) return;
     // Stopping the link task interrupts this turn too and tells the requester who stopped it.
-    if (await stopActiveLinkTask(environmentId, serverProjection?.runs ?? [])) return;
+    if (
+      ownRunIds === null &&
+      (await stopActiveLinkTask(environmentId, serverProjection?.runs ?? []))
+    )
+      return;
     const result = await interruptThreadTurn({
       environmentId,
-      input: { threadId: activeThread.id },
+      input:
+        ownActiveRunId === null
+          ? { threadId: activeThread.id }
+          : { threadId: activeThread.id, runId: ownActiveRunId, holdQueue: false },
     });
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       const error = squashAtomCommandFailure(result);
@@ -2543,6 +2567,7 @@ export default function ChatView(props: ChatViewProps) {
     return item ? [item] : [];
   });
   const limitRecoveryBanner =
+    canOperateThread &&
     serverRuntime?.status === "failed" &&
     serverRuntime.lastErrorClass === "usage_limit" &&
     activeThreadShell?.latestRun
@@ -2941,6 +2966,7 @@ export default function ChatView(props: ChatViewProps) {
           editingRunId={queuedRunEdit.editingRunId}
           onEditQueuedRun={queuedRunEdit.beginEdit}
           onCancelEdit={queuedRunEdit.cancelEdit}
+          ownRunIds={ownRunIds}
         />
       </>
     ) : null;
@@ -3276,7 +3302,14 @@ export default function ChatView(props: ChatViewProps) {
                 {...(paintOnlyDisplayedTimeline
                   ? {}
                   : {
-                      retryableWorkspacePreparationRunIds,
+                      retryableWorkspacePreparationRunIds:
+                        ownRunIds === null
+                          ? retryableWorkspacePreparationRunIds
+                          : new Set(
+                              [...retryableWorkspacePreparationRunIds].filter((runId) =>
+                                ownRunIds.has(runId),
+                              ),
+                            ),
                       onRetryWorkspacePreparation: onRetryWorkspacePreparationStable,
                     })}
                 {...(draftId
@@ -3487,7 +3520,9 @@ export default function ChatView(props: ChatViewProps) {
                           {!composerMounted ? null : (
                             <ChatComposer
                               canOperateThread={canSendMessages}
-                              canRespondToRuntime={sharedThreadCapabilities.respondToRuntime}
+                              canAnswerQuestions={sharedThreadCapabilities.answerQuestions}
+                              canStartThreads={sharedThreadCapabilities.manageThread}
+                              canAnswerApprovals={sharedThreadCapabilities.answerApprovals}
                               reportedModelSelection={reportedModelSelection}
                               multipleModelSelections={multipleModelSelections}
                               supportsMultipleModels={
@@ -3529,7 +3564,9 @@ export default function ChatView(props: ChatViewProps) {
                                 queuedRunEdit.isSaving ||
                                 isResuming
                               }
-                              canResume={resumableRunId !== null || hasHeldQueuedRuns}
+                              canResume={
+                                canOperateThread && (resumableRunId !== null || hasHeldQueuedRuns)
+                              }
                               isRevertingCheckpoint={isRevertingCheckpoint}
                               sendDisabledReason={
                                 !canSendMessages

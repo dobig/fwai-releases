@@ -76,6 +76,8 @@ export function QueuedRunsControl({
   readonly editingRunId: RunId | null;
   readonly onEditQueuedRun: (request: EditQueuedRunRequest) => void;
   readonly onCancelEdit: () => void;
+  /** In someone else's shared thread: the runs this account started, the only ones it manages. */
+  readonly ownRunIds?: ReadonlySet<RunId> | null;
 }) {
   const projection = useThreadProjection(
     scopeThreadRef(props.environmentId, props.threadId),
@@ -104,8 +106,13 @@ export function QueuedRunsControl({
   const workflow = projection ? deriveThreadQueueWorkflowState(projection) : null;
   const queued = workflow?.queuedRuns ?? [];
   const activeRun = workflow?.activeRun ?? null;
-  const canReorder = workflow?.canReorder === true;
-  const canSend = workflow?.canSendNow === true || workflow?.canPromoteToSteer === true;
+  const ownRunIds = props.ownRunIds ?? null;
+  const mine = (runId: RunId) => ownRunIds === null || ownRunIds.has(runId);
+  const canReorder = workflow?.canReorder === true && ownRunIds === null;
+  const canSend = (runId: RunId) =>
+    mine(runId) &&
+    (workflow?.canSendNow === true ||
+      (workflow?.canPromoteToSteer === true && activeRun !== null && mine(activeRun.id)));
   const queuedImageUrlById = new Map(
     queuedImageAttachmentUrls.flatMap((url, index) => {
       const resource = queuedImageAttachmentResources[index];
@@ -123,7 +130,8 @@ export function QueuedRunsControl({
       serverIndex,
       text,
       // A guest's message keeps the guest's words; the owner can cancel it, not rewrite it.
-      editable: context?.guest === undefined,
+      editable: context?.guest === undefined && mine(run.id),
+      removable: mine(run.id),
       guestName: context?.guest?.name,
       attachments,
       thumbnails: attachments
@@ -142,6 +150,7 @@ export function QueuedRunsControl({
       serverIndex: null,
       text: message.text,
       editable: true,
+      removable: true,
       guestName: undefined,
       attachments: [] as ReadonlyArray<ContractChatAttachment>,
       thumbnails: (message.attachments ?? [])
@@ -175,7 +184,7 @@ export function QueuedRunsControl({
   };
 
   const sendQueuedMessage = async (queuedRunId: RunId) => {
-    if (!canSend || steerInFlightRef.current) return;
+    if (!canSend(queuedRunId) || steerInFlightRef.current) return;
     steerInFlightRef.current = true;
     setBusyRunId(queuedRunId);
     if (workflow?.canSendNow) {
@@ -196,7 +205,7 @@ export function QueuedRunsControl({
   useImperativeHandle(ref, () => ({
     steerNext(repeat) {
       const next = queued[0];
-      if (!next || !canSend) return false;
+      if (!next || !canSend(next.run.id)) return false;
       if (!repeat && busyRunId === null) void sendQueuedMessage(next.run.id);
       return true;
     },
@@ -206,6 +215,7 @@ export function QueuedRunsControl({
       if (
         !latest ||
         latest.context?.guest !== undefined ||
+        !mine(latest.run.id) ||
         props.editingRunId !== null ||
         busyRunId !== null
       ) {
@@ -446,7 +456,9 @@ export function QueuedRunsControl({
                             <Button
                               size="xs"
                               variant="ghost-muted"
-                              disabled={item.runId === null || busyRunId !== null || !canSend}
+                              disabled={
+                                item.runId === null || busyRunId !== null || !canSend(item.runId)
+                              }
                               onClick={() => {
                                 if (item.runId !== null) {
                                   void sendQueuedMessage(item.runId);
@@ -466,7 +478,9 @@ export function QueuedRunsControl({
                             render={
                               <ComposerBanner.Dismiss
                                 aria-label="Remove queued message"
-                                disabled={item.runId === null || busyRunId !== null}
+                                disabled={
+                                  item.runId === null || !item.removable || busyRunId !== null
+                                }
                                 onClick={() => {
                                   if (item.runId !== null) void remove(item.runId);
                                 }}

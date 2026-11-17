@@ -9,7 +9,10 @@ import {
   type AuthEnvironmentScope,
   type OrchestrationV2ShellStreamItem,
   type ProjectId,
+  type ProviderRequestKind,
   type RuntimeMode,
+  type RuntimeRequestId,
+  type RunId,
   type ThreadId,
   type ThreadShare,
 } from "@t3tools/contracts";
@@ -21,6 +24,7 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import { narrowerRuntimeMode } from "../orchestration-v2/RuntimePolicy.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 
 /**
@@ -50,6 +54,32 @@ const COLLABORATOR_RPC_METHODS: ReadonlySet<string> = new Set<string>([
   ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
   WS_METHODS.subscribeServerConfig,
   WS_METHODS.subscribeServerLifecycle,
+  WS_METHODS.serverProbe,
+  WS_METHODS.serverGetConfig,
+  WS_METHODS.attachmentsCreateUploadUrl,
+  WS_METHODS.assetsPersistChatAttachments,
+  WS_METHODS.assetsCreateUrl,
+]);
+
+/** Calls that name no thread: connection health, config, and uploading an attachment to send. */
+const UNTHREADED_COLLABORATOR_METHODS: ReadonlySet<string> = new Set<string>([
+  ORCHESTRATION_V2_WS_METHODS.subscribeShell,
+  WS_METHODS.subscribeServerConfig,
+  WS_METHODS.subscribeServerLifecycle,
+  WS_METHODS.serverProbe,
+  WS_METHODS.serverGetConfig,
+  WS_METHODS.attachmentsCreateUploadUrl,
+]);
+
+/** Commands a collaborator may send for a run only when it started that run. */
+const OWN_RUN_COMMANDS: ReadonlySet<string> = new Set([
+  "run.interrupt",
+  "subagent.stop",
+  "queued-run.cancel",
+  "queued-run.edit",
+  "queued-run.start",
+  "prepared-run.retry",
+  "queued-message.promote-to-steer",
 ]);
 
 export const isCollaboratorPrincipal = (
@@ -101,6 +131,27 @@ export function collaboratorRunNeedsApproval(
     (share) => share.role === "collaborator",
   );
   return collaborating.length > 0 && collaborating.every((share) => share.requireApproval);
+}
+
+const APPROVAL_REQUEST_KINDS: ReadonlySet<string> = new Set<ProviderRequestKind>([
+  "command",
+  "file-read",
+  "file-change",
+  "mcp-elicitation",
+  "permission",
+]);
+
+/**
+ * Questions are the collaborator's to answer. Approvals are the owner's while the collaborator's
+ * share asks for them, else theirs too; anything else (auth, tool calls) stays the owner's.
+ */
+function collaboratorMayAnswer(
+  principal: AuthAccountPrincipal,
+  shares: ReadonlyArray<ThreadShare> | undefined,
+  kind: string,
+): boolean {
+  if (kind === "user_input") return true;
+  return APPROVAL_REQUEST_KINDS.has(kind) && !collaboratorRunNeedsApproval(principal, shares);
 }
 
 export class ThreadAccessPolicy extends Context.Service<
@@ -179,6 +230,25 @@ const make = Effect.gen(function* () {
         )
       : Effect.succeed("owner");
 
+  // A run belongs to whoever wrote the message that started it.
+  const runsStartedBy = Effect.fn("ThreadAccessPolicy.runsStartedBy")(
+    function* (principal: AuthAccountPrincipal, threadId: ThreadId, runIds: ReadonlyArray<RunId>) {
+      const { runs } = yield* projections.getThreadRecords(threadId, ["runs"], { runIds });
+      const wanted = new Set<string>(runIds);
+      const matched = runs.filter((run) => wanted.has(run.id));
+      if (matched.length !== wanted.size) return false;
+      const { messages } = yield* projections.getThreadRecords(threadId, ["messages"], {
+        messageIds: matched.map((run) => run.userMessageId),
+      });
+      return matched.every(
+        (run) =>
+          messages.find((message) => message.id === run.userMessageId)?.authorAccountId ===
+          principal.accountId,
+      );
+    },
+    Effect.orElseSucceed(() => false),
+  );
+
   // Shared sessions never hold the owner's scopes, so name the one an owner session carries.
   const denied = (message: string) =>
     Effect.fail(
@@ -195,23 +265,82 @@ const make = Effect.gen(function* () {
     const fields = (typeof payload === "object" && payload !== null ? payload : {}) as {
       readonly threadId?: unknown;
       readonly type?: unknown;
+      readonly requestId?: unknown;
+      readonly runId?: unknown;
+      readonly queuedRunId?: unknown;
+      readonly targetRunId?: unknown;
+      readonly holdQueue?: unknown;
+      readonly runtimeMode?: unknown;
+      readonly resource?: { readonly _tag?: unknown; readonly threadId?: unknown };
     };
+    if (UNTHREADED_COLLABORATOR_METHODS.has(method)) return;
+    if (method === WS_METHODS.assetsCreateUrl) {
+      // Attachment ids are unguessable; everything else reads the owner's files.
+      if (fields.resource?._tag === "attachment") return;
+      if (fields.resource?._tag !== "tool-output-image") {
+        return yield* denied("Only the owner can do this on a shared environment.");
+      }
+    }
+    const threadIdField =
+      method === WS_METHODS.assetsCreateUrl ? fields.resource?.threadId : fields.threadId;
+    if (typeof threadIdField !== "string") {
+      return yield* denied("This thread is not shared with you.");
+    }
+    const threadId = threadIdField as ThreadId;
+    const thread = yield* sharesOf(threadId);
+    const threadAccess = thread === null ? null : threadAccessFor(principal, thread);
+    if (threadAccess === null) return yield* denied("This thread is not shared with you.");
     if (
-      method === ORCHESTRATION_V2_WS_METHODS.subscribeShell ||
-      method === WS_METHODS.subscribeServerConfig ||
-      method === WS_METHODS.subscribeServerLifecycle
+      method !== ORCHESTRATION_V2_WS_METHODS.dispatchCommand &&
+      method !== WS_METHODS.assetsPersistChatAttachments
     ) {
       return;
     }
-    if (typeof fields.threadId !== "string") {
-      return yield* denied("This thread is not shared with you.");
+    if (threadAccess !== "collaborator") {
+      return yield* denied("You can only read this shared thread.");
     }
-    const threadAccess = yield* access(principal, fields.threadId as ThreadId);
-    if (threadAccess === null) return yield* denied("This thread is not shared with you.");
-    if (method !== ORCHESTRATION_V2_WS_METHODS.dispatchCommand) return;
-    if (fields.type !== "message.dispatch" || threadAccess !== "collaborator") {
-      return yield* denied("You can only send messages in this shared thread.");
+    if (method === WS_METHODS.assetsPersistChatAttachments) return;
+    switch (fields.type) {
+      case "message.dispatch":
+      case "thread.interaction-mode.set":
+        return;
+      case "thread.runtime-mode.set": {
+        // The owner's later runs use the thread's mode too, so a collaborator who must ask the
+        // owner may only tighten it.
+        const ceiling = collaboratorRunNeedsApproval(principal, thread?.shares)
+          ? ("approval-required" as const)
+          : undefined;
+        const mode = fields.runtimeMode as RuntimeMode;
+        if (narrowerRuntimeMode(mode, ceiling) === mode) return;
+        return yield* denied("Only the owner can loosen this thread's approvals.");
+      }
     }
+    if (typeof fields.type === "string" && OWN_RUN_COMMANDS.has(fields.type)) {
+      const runIds = [fields.runId, fields.queuedRunId, fields.targetRunId].filter(
+        (id): id is RunId => typeof id === "string",
+      );
+      if (
+        runIds.length > 0 &&
+        fields.holdQueue !== true &&
+        (yield* runsStartedBy(principal, threadId, runIds))
+      ) {
+        return;
+      }
+      return yield* denied("You can only manage your own messages in this shared thread.");
+    }
+    if (fields.type === "runtime-request.respond" || fields.type === "thread.user-input.dismiss") {
+      const request =
+        typeof fields.requestId === "string"
+          ? yield* projections
+              .getRuntimeRequest(threadId, fields.requestId as RuntimeRequestId)
+              .pipe(Effect.orElseSucceed(() => undefined))
+          : undefined;
+      if (request !== undefined && collaboratorMayAnswer(principal, thread?.shares, request.kind)) {
+        return;
+      }
+      return yield* denied("Only the owner can answer this request.");
+    }
+    return yield* denied("You can only send messages in this shared thread.");
   });
 
   const filterShell: ThreadAccessPolicy["Service"]["filterShell"] = (principal, stream) => {

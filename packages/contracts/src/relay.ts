@@ -1143,6 +1143,8 @@ export const RelaySharedThread = Schema.Struct({
   targetKind: ThreadShareTargetKind,
   /** The owner's environment reported in recently; it may still be unreachable. */
   online: Schema.Boolean,
+  /** Collaborators only: the owner approves their commands and file changes. Absent: assume so. */
+  requireApproval: Schema.optional(Schema.Boolean),
 });
 export type RelaySharedThread = typeof RelaySharedThread.Type;
 

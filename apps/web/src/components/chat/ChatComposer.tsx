@@ -372,8 +372,9 @@ export interface ChatComposerProps {
   composerDraftTarget: ScopedThreadRef | DraftId;
   environmentId: EnvironmentId;
   canOperateThread: boolean;
-  /** False in a colleague's shared thread: only the owner answers approvals and questions. */
-  canRespondToRuntime: boolean;
+  /** In a colleague's shared thread: collaborators answer questions, approvals per their share. */
+  canAnswerQuestions: boolean;
+  canAnswerApprovals: boolean;
   attachmentUploadsCapabilityKnown: boolean;
   supportsAttachmentUploads: boolean;
   supportsQuestionAttachments: boolean;
@@ -501,6 +502,8 @@ export interface ChatComposerProps {
   onResume: () => void;
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
+  /** False in someone else's shared thread, where starting another thread is the owner's. */
+  canStartThreads: boolean;
   onRespondToApproval: (
     requestId: RuntimeRequestId,
     decision: ProviderApprovalDecision,
@@ -543,7 +546,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     composerDraftTarget,
     environmentId,
     canOperateThread,
-    canRespondToRuntime,
+    canAnswerQuestions,
+    canAnswerApprovals,
     attachmentUploadsCapabilityKnown,
     supportsAttachmentUploads,
     supportsQuestionAttachments,
@@ -625,6 +629,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onResume,
     onInterrupt,
     onImplementPlanInNewThread,
+    canStartThreads,
     onRespondToApproval,
     onSelectActivePendingUserInputOption,
     onAdvanceActivePendingUserInput,
@@ -978,10 +983,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const resolvedCompactDisabledReason =
     compactDisabledReason ?? (noProviderAvailable ? "Compacting is unavailable right now" : null);
   const supportedRuntimeModes = selectedProviderEntry?.snapshot.supportedRuntimeModes;
-  const compatibleRuntimeModeOptions =
+  const compatibleRuntimeModeOptions = (
     supportedRuntimeModes && supportedRuntimeModes.length > 0
       ? runtimeModeOptions.filter((option) => supportedRuntimeModes.includes(option.mode))
-      : runtimeModeOptions;
+      : runtimeModeOptions
+  ).filter(
+    // A collaborator whose share asks the owner to approve may only tighten the thread's mode.
+    (option) =>
+      canAnswerApprovals || option.mode === "approval-required" || option.mode === runtimeMode,
+  );
   const compatibleRuntimeMode = compatibleRuntimeModeOptions.some(
     (option) => option.mode === runtimeMode,
   )
@@ -3040,7 +3050,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (questionAttachmentTarget !== null) {
       const canAnswer =
         canOperateThread &&
-        canRespondToRuntime &&
+        canAnswerQuestions &&
         !isConnecting &&
         !activePendingIsResponding &&
         activePendingProgress?.activeQuestion?.allowCustomAnswer !== false;
@@ -3628,12 +3638,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       />
                     </ComposerBanner.Content>
                     <ComposerBanner.Actions>
-                      {canRespondToRuntime ? null : (
+                      {canAnswerApprovals ? null : (
                         <span className="text-muted-foreground text-xs">Waiting for the owner</span>
                       )}
                       <ComposerPendingApprovalActions
                         requestId={activePendingApproval.requestId}
-                        disabled={!canOperateThread || !canRespondToRuntime}
+                        disabled={!canOperateThread || !canAnswerApprovals}
                         isResponding={respondingRequestIds.includes(
                           activePendingApproval.requestId,
                         )}
@@ -3648,7 +3658,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     pendingUserInputs={pendingUserInputs}
                     cwd={gitCwd ?? undefined}
                     threadRef={routeThreadRef}
-                    disabled={!canOperateThread || !canRespondToRuntime}
+                    disabled={!canOperateThread || !canAnswerQuestions}
                     respondingRequestIds={
                       activePendingIsResponding && activePendingUserInput
                         ? [...respondingRequestIds, activePendingUserInput.requestId]
@@ -3953,7 +3963,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       preserveComposerFocusOnPointerDown
                       onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                       onInterrupt={handleInterruptPrimaryActionStable}
-                      onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryActionStable}
+                      onImplementPlanInNewThread={
+                        canStartThreads ? handleImplementPlanInNewThreadPrimaryActionStable : null
+                      }
                     />
                   </div>
                 ) : null}
@@ -4050,7 +4062,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     onResume={onResume}
                     onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                     onInterrupt={handleInterruptPrimaryActionStable}
-                    onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryActionStable}
+                    onImplementPlanInNewThread={
+                      canStartThreads ? handleImplementPlanInNewThreadPrimaryActionStable : null
+                    }
                     compactBeforeSendTokens={props.resumeCompactionTokens}
                     keepFullHistory={props.keepFullHistory}
                     onToggleKeepFullHistory={props.onToggleKeepFullHistory}
