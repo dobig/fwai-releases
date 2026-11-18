@@ -27,19 +27,16 @@ import {
 } from "../sharing/colleagues";
 import { toastManager } from "../ui/toast";
 import type { ComposerCommandItem } from "./ComposerCommandMenu";
-import {
-  linkGroupSuggestions,
-  linkSuggestions,
-  resolveShareTarget,
-  shareSuggestions,
-} from "./composerTeamCommands";
+import { resolveShareTarget, shareSuggestions } from "./composerTeamCommands";
 import { useAccountEnvironments } from "./LinkGroupsDialogs";
 import {
   defaultOwnLinkPurpose,
   linkCandidateKey,
   linkCandidates,
+  linkGroupSuggestions,
   linkGroupsOfEither,
-} from "./linkGroups.logic";
+  linkSuggestions,
+} from "@t3tools/client-runtime/link-groups";
 import { useRunLinkCommand } from "./useLinkThreadsSubmit";
 
 const MEMBER_SEARCH_DELAY_MS = 150;

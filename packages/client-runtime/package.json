@@ -135,6 +135,10 @@
       "types": "./src/linkCommand.ts",
       "default": "./src/linkCommand.ts"
     },
+    "./link-groups": {
+      "types": "./src/linkGroups.ts",
+      "default": "./src/linkGroups.ts"
+    },
     "./state/link-groups": {
       "types": "./src/state/linkGroups.ts",
       "default": "./src/state/linkGroups.ts"
