@@ -71,6 +71,7 @@ import { formatRelativeTimeLabel, parseTimestampDate } from "../../timestampForm
 import type { SidebarThreadSummary } from "../../types";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { cn } from "~/lib/utils";
+import { SIDEBAR_SWIPE_ACTION_WIDTH, useSidebarRowSwipe } from "./sidebarRowSwipe";
 import { textDirection } from "~/textDirection";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import {
@@ -633,10 +634,37 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   const canOperateThread = useEnvironmentScope(thread.environmentId, AuthOrchestrationOperateScope);
   const { leaseLiveStatus, rowRef: leaseRowRef } = useSidebarRowSubscriptionLease(props.isActive);
   const { revealRef } = props;
+  const swipeSupported =
+    variantAction === "unsnooze" ? props.snoozeSupported : props.settlementSupported;
+  const { bindRow, bindAction, rowHandlers, onActionClick } = useSidebarRowSwipe({
+    enabled: swipeSupported && canOperateThread && !isRenaming && !props.sortable?.isDragging,
+    onCommit: () =>
+      variantAction === "settle"
+        ? onSettle(threadRef)
+        : variantAction === "unsettle"
+          ? onUnsettle(threadRef)
+          : onUnsnooze(threadRef),
+  });
   const rowRef = (row: HTMLElement | null) => {
     if (row !== null) revealRef?.(row, threadKey);
+    bindRow(row);
     return leaseRowRef(row);
   };
+  const swipeAction = swipeSupported ? (
+    <button
+      ref={bindAction}
+      type="button"
+      tabIndex={-1}
+      onClick={onActionClick}
+      style={{ visibility: "hidden", width: SIDEBAR_SWIPE_ACTION_WIDTH }}
+      className={cn(
+        "absolute right-0 inline-flex cursor-pointer items-center justify-center gap-1 overflow-hidden rounded-md bg-primary text-xs font-medium whitespace-nowrap text-primary-foreground",
+        variant === "card" ? "inset-y-0.5" : "inset-y-0",
+      )}
+    >
+      {dropVerbBadge[variantAction === "unsnooze" ? "wake" : variantAction]}
+    </button>
+  ) : null;
   const isRegeneratingTitle = thread.titleRegeneration != null;
   const localLastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const lastVisitedAt = resolveThreadLastVisitedAt(thread.lastVisitedAt, localLastVisitedAt);
@@ -909,7 +937,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   };
 
   const rowSurfaceClassName = cn(
-    "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+    "group/sidebar-row relative w-full cursor-pointer touch-pan-y overflow-hidden rounded-md text-left outline-none select-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
     variantAction === "unsettle" &&
       !props.isActive &&
       "[&:not(:hover):not(:focus-within)_*]:text-secondary-label/70 redesign:[&:not(:hover):not(:focus-within)_*]:text-secondary-label",
@@ -1098,7 +1126,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         {...sortableRootProps}
         {...(fileDropHandlers ?? {})}
         className={cn(
-          "list-none [content-visibility:auto] [contain-intrinsic-size:auto_36px]",
+          "relative list-none [content-visibility:auto] [contain-intrinsic-size:auto_36px]",
           sortable?.isDragging && "relative z-20",
         )}
       >
@@ -1112,6 +1140,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                 aria-label={accessibility.label}
                 aria-current={accessibility.current}
                 data-testid="sidebar-row-slim"
+                {...rowHandlers}
                 aria-busy={isRegeneratingTitle || undefined}
                 className={cn(rowSurfaceClassName, "flex h-9 items-center gap-2.5 px-2.5")}
                 onClick={handleClick}
@@ -1248,6 +1277,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           </TooltipTrigger>
           {detailsTooltip}
         </Tooltip>
+        {swipeAction}
       </li>
     );
   }
@@ -1268,7 +1298,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       {...sortableRootProps}
       {...(fileDropHandlers ?? {})}
       className={cn(
-        "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_78px]",
+        "relative list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_78px]",
         metaLineEmpty && "redesign:[contain-intrinsic-size:auto_58px]",
         sortable?.isDragging && "relative z-20",
       )}
@@ -1283,6 +1313,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               aria-label={accessibility.label}
               aria-current={accessibility.current}
               data-testid="sidebar-row-card"
+              {...rowHandlers}
               aria-busy={isRegeneratingTitle || undefined}
               className={rowSurfaceClassName}
               onClick={handleClick}
@@ -1537,6 +1568,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         </TooltipTrigger>
         {detailsTooltip}
       </Tooltip>
+      {swipeAction}
     </li>
   );
 });
