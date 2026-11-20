@@ -15,7 +15,7 @@ type IconVariant = "dev" | "nightly" | "prod";
 
 const ADAPTIVE_CANVAS = 432;
 const SPLASH_CANVAS = 1152;
-const TEXT = { x: 15.53, y: 37, width: 94.5, height: 57 };
+const TEXT = { x: 22.25, y: 31.75, width: 76, height: 71.5 };
 const WORDMARK_FRACTION = 0.48;
 // The themed-icon mark and the notification silhouette are alpha-only, so the mark fills more of them.
 const MONOCHROME_MARK_FRACTION = 0.646;
@@ -24,7 +24,7 @@ const NOTIFICATION_MARK_FRACTION = 2 / 3;
 const COMPOSER_CANVAS_PT = 1024;
 const SVG_DENSITY = 300;
 const OUTPUT_DIRECTORY = "apps/mobile/assets";
-const PRODUCTION_BACKGROUND_COLOR = "#000000";
+const PRODUCTION_BACKGROUND_COLOR = "#1A1E29";
 
 export class AndroidIconRenderError extends Schema.TaggedError<AndroidIconRenderError>()(
   "AndroidIconRenderError",
@@ -95,7 +95,7 @@ const renderMark = Effect.fn("androidIcons.renderMark")(function* (
 ) {
   const text = yield* readLayerSource(repositoryRoot, "prod", "text.svg");
   const paths = (text.match(/<path[^>]*\/>/g) ?? []).map((path) =>
-    path.replace(/fill="[^"]*"/, 'fill="white"'),
+    path.replace(/(fill|stroke)="(?!none")[^"]*"/g, '$1="white"'),
   );
   return yield* rasterize(
     layer,
