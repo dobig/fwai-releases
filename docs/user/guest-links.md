@@ -14,6 +14,7 @@ expired work again when you turn it back on.
 
 1. Right-click the thread in the sidebar and choose **Share with guest**. It is also in the thread
    menu and the command palette.
+   On mobile, long-press the thread, choose **Share…** and use **Guest link**.
 2. Copy the link and send it to one person. It works in one browser and expires after 24 hours.
    Opening it again in that browser takes them back to the thread.
 3. When they send a message, it appears at the end of the thread and the sidebar shows **Request**.

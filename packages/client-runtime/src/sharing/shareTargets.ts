@@ -1,4 +1,9 @@
-import type { ThreadShare, ThreadShareTarget, ThreadShareTargetKind } from "@t3tools/contracts";
+import {
+  isThreadShareLinkOpen,
+  type ThreadShare,
+  type ThreadShareTarget,
+  type ThreadShareTargetKind,
+} from "@t3tools/contracts";
 import type { FwaiGatewayOrganizationResponse } from "@t3tools/shared/fwaiGateway";
 
 export type OrganizationRole = "owner" | "member";
@@ -51,7 +56,44 @@ export function describeShareStatus(share: Pick<ThreadShare, "status">): string 
   }
 }
 
-export function describeShareRole(share: Pick<ThreadShare, "role" | "requireApproval">): string {
+function describeShareRole(share: Pick<ThreadShare, "role" | "requireApproval">): string {
   if (share.role === "viewer") return "Can view";
   return share.requireApproval ? "Can send messages, you approve actions" : "Can send messages";
+}
+
+/** Who a share is with, as the share dialog lists it. */
+export function shareTargetLabel(share: Pick<ThreadShare, "target" | "link">): string {
+  switch (share.target.kind) {
+    case "project":
+      return `Project ${share.target.label}`;
+    case "organization":
+      return `Everyone in ${share.target.label}`;
+    case "link":
+      return share.link?.mode === "multi" ? "Invite link for anyone" : "Invite link for one person";
+    case "account":
+      return share.target.label || "Someone";
+  }
+}
+
+/** The second line of a share: its access, the link's state, and what it still waits for. */
+export function describeShareDetail(
+  share: ThreadShare,
+  now: string,
+  formatExpiry: (expiresAt: string) => string,
+): string {
+  const parts = [describeShareRole(share)];
+  const link = share.link;
+  if (share.target.kind === "link" && link !== undefined) {
+    parts.push(
+      link.closedAt !== undefined
+        ? "Used"
+        : !isThreadShareLinkOpen(share, now)
+          ? "Expired"
+          : `Expires ${formatExpiry(link.expiresAt)}`,
+    );
+  }
+  if (share.viaShareId !== undefined) parts.push("via link");
+  const status = describeShareStatus(share);
+  if (status !== null) parts.push(status);
+  return parts.join(" · ");
 }

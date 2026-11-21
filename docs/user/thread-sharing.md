@@ -79,6 +79,7 @@ Revoke a share or an invite link from the share dialog, or see every thread you 
 **Settings → Sharing → Shared by me**. Settling or archiving a thread ends all its shares, and shared threads are never
 settled automatically. Unsettling does not bring shares back; share it again.
 
-On mobile you can open and follow threads shared with you, join through invite links, and see who
-sent each message. Sharing a thread, creating invite links, the Team panel, `/share`, **Shared by me** and deciding organization share requests are on
-the web and desktop apps only; mobile shows organization owners how many requests wait.
+On mobile, long-press a thread in the list and choose **Share…** to share it, create invite links
+and revoke access; a shared thread also shows **Manage** above its composer. **Settings → Sharing**
+lists the threads you shared and, for organization owners, the organization share requests to
+approve or reject. **Settings → Team** lists your organization's projects and members.

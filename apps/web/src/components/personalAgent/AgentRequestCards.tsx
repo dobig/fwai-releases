@@ -2,10 +2,12 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   acceptDecision,
   actionLabel,
+  findOrganizationMember,
   proposedTask,
   requestsAwaitingDecision,
   requestsForThread,
   requesterStatusLabel,
+  withSendTarget,
 } from "@t3tools/client-runtime/sharing/personal-agent";
 import {
   isAtomCommandInterrupted,
@@ -90,10 +92,7 @@ export function AgentApprovalCard({ request }: { readonly request: AgentRequest 
   const forward = async () => {
     if (directory === null) return;
     const name = forwardTo.trim().replace(/^@/u, "");
-    const members = await directory.searchMembers({ q: name, limit: 20 }).catch(() => null);
-    const member = members?.members.find(
-      (candidate) => candidate.username.toLowerCase() === name.toLowerCase(),
-    );
+    const member = await findOrganizationMember(directory, name);
     if (member === undefined) {
       toastManager.add({ type: "error", title: `No one named "${name}" in your organization` });
       return;
@@ -304,7 +303,7 @@ export function AgentApprovalCard({ request }: { readonly request: AgentRequest 
           }
           onClick={() =>
             void send(
-              withTarget(
+              withSendTarget(
                 acceptDecision(request, text.trim(), editsTask ? task : undefined),
                 targetThreadId,
               ),
@@ -321,15 +320,6 @@ export function AgentApprovalCard({ request }: { readonly request: AgentRequest 
       </footer>
     </article>
   );
-}
-
-/** The owner may point an approved send at another thread; the environment re-checks it. */
-function withTarget(decision: AgentDecision, threadId: ThreadId | null): AgentDecision {
-  return threadId !== null &&
-    decision.decision === "accept" &&
-    decision.action.kind === "send_to_thread"
-    ? { ...decision, action: { ...decision.action, threadId } }
-    : decision;
 }
 
 /**

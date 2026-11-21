@@ -1,7 +1,4 @@
-import type {
-  EnvironmentProject,
-  EnvironmentThreadShell,
-} from "@t3tools/client-runtime/state/models";
+import type { EnvironmentProject, EnvironmentThreadShell } from "./state/models.ts";
 import {
   LINK_MAX_MEMBERS,
   type EnvironmentId,
@@ -40,7 +37,7 @@ export function linkCandidateThreads(
         thread.id !== currentThreadId &&
         isLinkableShell(thread),
     )
-    .toSorted(newestFirst);
+    .sort(newestFirst);
 }
 
 export type LinkCandidate =
@@ -100,7 +97,7 @@ export function linkCandidates(input: {
   const local: LinkCandidate[] = [];
   const own: LinkCandidate[] = [];
   const currentIsLinked = accountEnvironments.has(current.environmentId);
-  for (const thread of input.shells.toSorted(newestFirst)) {
+  for (const thread of [...input.shells].sort(newestFirst)) {
     const ref = { environmentId: thread.environmentId, threadId: thread.id };
     if (excluded.has(linkCandidateKey(ref)) || !isLinkableShell(thread)) continue;
     const project = projectOf(thread);
@@ -133,14 +130,14 @@ export function linkCandidates(input: {
       ownerSub: thread.ownerSub,
       online: thread.online,
     }))
-    .toSorted(
+    .sort(
       (left, right) =>
         onlineFirst(left) - onlineFirst(right) || left.title.localeCompare(right.title),
     );
   // Shells are newest first, and a stable sort keeps that order within online and offline.
   return [
     ...local,
-    ...own.toSorted((left, right) => onlineFirst(left) - onlineFirst(right)),
+    ...own.sort((left, right) => onlineFirst(left) - onlineFirst(right)),
     ...shared,
   ];
 }
@@ -288,7 +285,7 @@ export function linkGroupsOfEither<Group extends PlanGroup>(
 ): ReadonlyArray<Group> {
   return groups
     .filter((group) => isMemberOf(group, current) || isMemberOf(group, candidate))
-    .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
 }
 
 const clip = (value: string | null, max: number) =>
@@ -466,7 +463,7 @@ export function flattenLinkChain(
 ): ReadonlyArray<LinkChainNode> {
   const ids = new Set(tasks.map((task) => task.taskId));
   const childrenByParent = new Map<NodeId | null, LinkChainTask[]>();
-  for (const task of tasks.toSorted((left, right) =>
+  for (const task of [...tasks].sort((left, right) =>
     left.createdAt.localeCompare(right.createdAt),
   )) {
     const parent =
@@ -485,4 +482,31 @@ export function flattenLinkChain(
   };
   for (const root of childrenByParent.get(null) ?? []) visit(root, 0);
   return nodes;
+}
+
+const LINK_SUGGESTION_LIMIT = 12;
+
+const normalizeQuery = (value: string) => value.trim().toLowerCase();
+
+/**
+ * What `/link <query>` offers: the picker's candidates whose title contains the query. An opening
+ * bracket is where a picked title goes, not part of it.
+ */
+export function linkSuggestions(
+  candidates: ReadonlyArray<LinkCandidate>,
+  query: string,
+): ReadonlyArray<LinkCandidate> {
+  const normalized = normalizeQuery(query.trimStart().replace(/^\[/u, ""));
+  return candidates
+    .filter((candidate) => candidate.title.toLowerCase().includes(normalized))
+    .slice(0, LINK_SUGGESTION_LIMIT);
+}
+
+/** What `/link <thread> group: <query>` offers: the two threads' groups whose name contains it. */
+export function linkGroupSuggestions<Group extends Pick<LinkGroup, "name">>(
+  groups: ReadonlyArray<Group>,
+  query: string,
+): ReadonlyArray<Group> {
+  const normalized = normalizeQuery(query);
+  return groups.filter((group) => group.name.toLowerCase().includes(normalized));
 }

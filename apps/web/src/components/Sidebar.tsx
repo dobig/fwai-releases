@@ -3180,13 +3180,21 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             );
                             break;
                           case "settled-header":
+                            // Shared threads sit directly above Settled, and take over its
+                            // bottom anchoring so the two stay together.
                             items.push(
+                              <li
+                                key="shared-threads"
+                                className={cn(
+                                  "list-none",
+                                  workingThreads.length + snoozedThreads.length === 0 && "mt-auto",
+                                )}
+                              >
+                                <SharedThreadsSidebarSection routeThreadKey={routeRowThreadKey} />
+                              </li>,
                               <SidebarSectionHeader
                                 key="settled-shelf-header"
                                 marker="settled-header"
-                                className={cn(
-                                  workingThreads.length + snoozedThreads.length === 0 && "mt-auto",
-                                )}
                                 label="Settled"
                                 count={settledCount}
                                 hostsUndoNotice={
@@ -3253,7 +3261,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               </DndContext>
             </TooltipProvider>
           ) : null}
-          {!isSearchingThreads ? (
+          {!isSearchingThreads && sidebarListItems.length === 0 ? (
             <SharedThreadsSidebarSection routeThreadKey={routeRowThreadKey} />
           ) : null}
           {!isSearchingThreads &&

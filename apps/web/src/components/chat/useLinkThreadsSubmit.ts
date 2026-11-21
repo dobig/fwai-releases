@@ -22,7 +22,7 @@ import {
   type LinkConfirmPlan,
   type LinkGroupChoice,
   linkCommandPlan,
-} from "./linkGroups.logic";
+} from "@t3tools/client-runtime/link-groups";
 import { openLinkGroupChoiceDialog, openLinkThreadsDialog } from "./linkGroupsDialogState";
 
 const isThreadShareError = Schema.is(ThreadShareError);

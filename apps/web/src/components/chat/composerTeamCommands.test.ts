@@ -1,10 +1,6 @@
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
-import type { RelaySharedThread } from "@t3tools/contracts/relay";
 import { describe, expect, it } from "vite-plus/test";
 
-import { linkSuggestions, resolveShareTarget, shareSuggestions } from "./composerTeamCommands";
-import { linkCandidates } from "./linkGroups.logic";
+import { resolveShareTarget, shareSuggestions } from "./composerTeamCommands";
 
 const member = (user_id: string, username: string, role: "owner" | "member" = "member") => ({
   user_id,
@@ -74,85 +70,5 @@ describe("resolveShareTarget", () => {
     expect(resolve("bo b")).toBeNull();
     expect(resolve("")).toBeNull();
     expect(resolve("bea")).toBeNull();
-  });
-});
-
-const environmentId = EnvironmentId.make("env-1");
-const otherEnvironmentId = EnvironmentId.make("env-2");
-
-function shell(
-  id: string,
-  title: string,
-  options: { readonly environmentId?: EnvironmentId; readonly subagent?: boolean } = {},
-): EnvironmentThreadShell {
-  return {
-    environmentId: options.environmentId ?? environmentId,
-    id: ThreadId.make(id),
-    title,
-    archivedAt: null,
-    deletedAt: null,
-    updatedAt: "2026-11-01T00:00:00.000Z",
-    lineage: {
-      parentThreadId: options.subagent ? ThreadId.make("parent") : null,
-      relationshipToParent: options.subagent ? "subagent" : null,
-    },
-  } as EnvironmentThreadShell;
-}
-
-function shared(id: string, title: string, role: RelaySharedThread["role"]): RelaySharedThread {
-  return {
-    environmentId: EnvironmentId.make("env-bob"),
-    threadId: ThreadId.make(id),
-    title,
-    ownerSub: "usr_bob",
-    role,
-    targetKind: "account",
-    online: true,
-  };
-}
-
-describe("linkSuggestions", () => {
-  const candidates = linkCandidates({
-    current: { environmentId, threadId: ThreadId.make("current") },
-    shells: [
-      shell("current", "Release notes"),
-      shell("local", "Release checklist"),
-      shell("child", "Release subtask", { subagent: true }),
-      shell("server", "Release build", { environmentId: otherEnvironmentId }),
-    ],
-    accountEnvironments: new Map([
-      [environmentId, { label: "Laptop", online: true }],
-      [otherEnvironmentId, { label: "Server", online: true }],
-    ]),
-    sharedThreads: [
-      shared("bobs", "Release review", "collaborator"),
-      shared("bobs-view", "Release viewing", "viewer"),
-    ],
-  });
-
-  it("matches titles across local, own-environment and collaborator threads", () => {
-    expect(
-      linkSuggestions(candidates, "release").map((candidate) => [
-        candidate.kind,
-        candidate.ref.threadId,
-      ]),
-    ).toEqual([
-      ["local", "local"],
-      ["own-environment", "server"],
-      ["shared", "bobs"],
-    ]);
-  });
-
-  it("leaves out the current thread, delegated children and view-only shares", () => {
-    const ids = linkSuggestions(candidates, "").map((candidate) => candidate.ref.threadId);
-    expect(ids).not.toContain("current");
-    expect(ids).not.toContain("child");
-    expect(ids).not.toContain("bobs-view");
-  });
-
-  it("matches a title being typed after the opening bracket", () => {
-    expect(linkSuggestions(candidates, "[release REV").map((c) => c.ref.threadId)).toEqual([
-      "bobs",
-    ]);
   });
 });
