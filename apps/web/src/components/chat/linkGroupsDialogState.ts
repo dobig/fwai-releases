@@ -6,7 +6,7 @@ import {
   type LinkCandidate,
   type LinkCommandInput,
   NO_LINK_COMMAND_INPUT,
-} from "./linkGroups.logic";
+} from "@t3tools/client-runtime/link-groups";
 
 export interface LinkThreadsDialogTarget {
   readonly threadRef: ScopedThreadRef;

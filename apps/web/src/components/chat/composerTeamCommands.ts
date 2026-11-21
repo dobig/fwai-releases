@@ -1,11 +1,8 @@
 import type { ShareQuickPicks } from "@t3tools/client-runtime/sharing/share-targets";
 import type { FwaiGatewayOrganizationMember } from "@t3tools/shared/fwaiGateway";
-import type { LinkGroup, ThreadShareTarget } from "@t3tools/contracts";
-
-import type { LinkCandidate } from "./linkGroups.logic";
+import type { ThreadShareTarget } from "@t3tools/contracts";
 
 const MEMBER_SUGGESTION_LIMIT = 8;
-const LINK_SUGGESTION_LIMIT = 12;
 
 /** Names that pick the whole organization besides its own name. */
 const ORGANIZATION_ALIASES = ["whole organization", "organization", "everyone"];
@@ -94,27 +91,4 @@ export function resolveShareTarget(input: {
     return organization;
   }
   return null;
-}
-
-/**
- * What `/link <query>` offers: the picker's candidates whose title contains the query. An opening
- * bracket is where a picked title goes, not part of it.
- */
-export function linkSuggestions(
-  candidates: ReadonlyArray<LinkCandidate>,
-  query: string,
-): ReadonlyArray<LinkCandidate> {
-  const normalized = normalize(query.trimStart().replace(/^\[/u, ""));
-  return candidates
-    .filter((candidate) => candidate.title.toLowerCase().includes(normalized))
-    .slice(0, LINK_SUGGESTION_LIMIT);
-}
-
-/** What `/link <thread> group: <query>` offers: the two threads' groups whose name contains it. */
-export function linkGroupSuggestions<Group extends Pick<LinkGroup, "name">>(
-  groups: ReadonlyArray<Group>,
-  query: string,
-): ReadonlyArray<Group> {
-  const normalized = normalize(query);
-  return groups.filter((group) => group.name.toLowerCase().includes(normalized));
 }

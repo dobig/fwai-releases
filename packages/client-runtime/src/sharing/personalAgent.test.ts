@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   AgentRequestId,
+  EMPTY_PERSONAL_AGENT_PERMISSIONS,
   EnvironmentId,
   ProjectId,
+  ProviderInstanceId,
   ThreadId,
   type AgentProposal,
   type AgentRequest,
@@ -10,10 +12,14 @@ import {
 
 import {
   acceptDecision,
+  chooseAgentModel,
   parseAskCommand,
   proposedTask,
   requestsAwaitingDecision,
   requestsForThread,
+  withExtraReadPath,
+  withProjectGrant,
+  withSendTarget,
 } from "./personalAgent.ts";
 
 const request = (overrides: Partial<AgentRequest> = {}): AgentRequest => ({
@@ -167,5 +173,52 @@ describe("request lists", () => {
       },
     });
     expect(proposedTask(legacySend)).toBe("Check the logs.");
+  });
+});
+
+describe("agent settings", () => {
+  const project = ProjectId.make("p1");
+
+  it("keeps a project row only while it overrides something", () => {
+    const overridden = withProjectGrant(EMPTY_PERSONAL_AGENT_PERMISSIONS, project, "send", "auto");
+    expect(overridden.projects).toEqual([{ projectId: project, grants: { send: "auto" } }]);
+    expect(withProjectGrant(overridden, project, "send", "inherit").projects).toEqual([]);
+  });
+
+  it("adds only new absolute folders, without a trailing slash", () => {
+    const added = withExtraReadPath(EMPTY_PERSONAL_AGENT_PERMISSIONS, " /srv/docs/ ");
+    expect(added.extraReadPaths).toEqual(["/srv/docs"]);
+    expect(withExtraReadPath(added, "/srv/docs")).toBe(added);
+    expect(withExtraReadPath(added, "relative/path")).toBe(added);
+  });
+
+  it("shows the running model until the owner picks another provider", () => {
+    const providers = [
+      { instanceId: "codex", models: [{ slug: "a" }, { slug: "b", isDefault: true }] },
+      { instanceId: "claude", models: [{ slug: "c" }, { slug: "d" }] },
+    ];
+    const running = {
+      providerInstanceId: ProviderInstanceId.make("claude"),
+      modelSelection: { instanceId: ProviderInstanceId.make("claude"), model: "d" },
+    };
+    const none = { instanceId: null, model: null };
+    expect(chooseAgentModel(providers, none, running)).toMatchObject({ model: "d" });
+    expect(
+      chooseAgentModel(providers, { instanceId: "codex", model: null }, running),
+    ).toMatchObject({ model: "b" });
+    expect(chooseAgentModel(providers, none, null).provider?.instanceId).toBe("codex");
+  });
+
+  it("points only an accepted send at another thread", () => {
+    const send = {
+      decision: "accept" as const,
+      action: { kind: "send_to_thread" as const, threadId: ThreadId.make("t1") },
+      text: "",
+    };
+    expect(withSendTarget(send, ThreadId.make("t2"))).toMatchObject({
+      action: { threadId: "t2" },
+    });
+    const reject = { decision: "reject" as const };
+    expect(withSendTarget(reject, ThreadId.make("t2"))).toBe(reject);
   });
 });

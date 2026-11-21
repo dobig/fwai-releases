@@ -16,8 +16,9 @@ export class SidebarPointerSensor {
   static activators = [
     {
       eventName: "onPointerDown" as const,
+      // Touch drags scroll the list or swipe a row's action (sidebarRowSwipe).
       handler: ({ nativeEvent }: ReactPointerEvent) =>
-        nativeEvent.isPrimary && nativeEvent.button === 0,
+        nativeEvent.isPrimary && nativeEvent.button === 0 && nativeEvent.pointerType !== "touch",
     },
   ];
   autoScrollEnabled = true;

@@ -56,7 +56,7 @@ import {
   linkGroupChoices,
   LINK_NAME_MAX_LENGTH,
   LINK_PURPOSE_MAX_LENGTH,
-} from "./linkGroups.logic";
+} from "@t3tools/client-runtime/link-groups";
 import {
   type LinkChainDialogTarget,
   linkChainDialogAtom,

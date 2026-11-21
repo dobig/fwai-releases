@@ -5,15 +5,14 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 import { isNotOrganizationMemberError } from "@t3tools/client-runtime/sharing/organization-directory";
 import {
-  describeShareRole,
-  describeShareStatus,
+  describeShareDetail,
   shareQuickPicks,
+  shareTargetLabel,
   shareWaitsForOrgOwner,
   type ShareQuickPicks,
 } from "@t3tools/client-runtime/sharing/share-targets";
 import type { FwaiGatewayOrganizationMember } from "@t3tools/shared/fwaiGateway";
 import {
-  isThreadShareLinkOpen,
   type ScopedThreadRef,
   type ThreadShare,
   type ThreadShareLinkExpiry,
@@ -495,13 +494,10 @@ function ThreadShareDialog({
   );
 }
 
-function describeLink(share: ThreadShare): string {
-  const link = share.link;
-  if (link === undefined) return "";
-  if (link.closedAt !== undefined) return "Used";
-  if (!isThreadShareLinkOpen(share, new Date())) return "Expired";
-  return `Expires ${new Date(link.expiresAt).toLocaleDateString()}`;
-}
+const shareDetail = (share: ThreadShare) =>
+  describeShareDetail(share, new Date().toISOString(), (expiresAt) =>
+    new Date(expiresAt).toLocaleDateString(),
+  );
 
 export function ShareRow({
   share,
@@ -521,7 +517,6 @@ export function ShareRow({
   /** Approves or rejects a share an agent proposed. */
   readonly onDecide: (approve: boolean) => void;
 }) {
-  const status = describeShareStatus(share);
   return (
     <li className="flex items-center gap-2 text-sm">
       {share.target.kind === "account" ? (
@@ -534,23 +529,8 @@ export function ShareRow({
         <Building2Icon aria-hidden className="size-4 text-muted-foreground" />
       )}
       <span className="flex min-w-0 flex-col">
-        <span className="truncate">
-          {share.target.kind === "project"
-            ? `Project ${share.target.label}`
-            : share.target.kind === "organization"
-              ? `Everyone in ${share.target.label}`
-              : share.target.kind === "link"
-                ? share.link?.mode === "multi"
-                  ? "Invite link for anyone"
-                  : "Invite link for one person"
-                : share.target.label || "Someone"}
-        </span>
-        <span className="truncate text-muted-foreground text-xs">
-          {describeShareRole(share)}
-          {share.target.kind === "link" ? ` · ${describeLink(share)}` : null}
-          {share.viaShareId !== undefined ? " · via link" : null}
-          {status !== null ? ` · ${status}` : null}
-        </span>
+        <span className="truncate">{shareTargetLabel(share)}</span>
+        <span className="truncate text-muted-foreground text-xs">{shareDetail(share)}</span>
       </span>
       {share.status === "proposed" ? (
         <span className="ml-auto flex gap-1">

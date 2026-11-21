@@ -4,7 +4,16 @@ import {
   type AgentDecision,
   type AgentProposedAction,
   type AgentRequest,
+  type PersonalAgentGrantMode,
+  type PersonalAgentPermissions,
+  type PersonalAgentProjectCapability,
+  type PersonalAgentProjectOverrides,
+  type PersonalAgentState,
+  type ProjectId,
+  type ThreadId,
 } from "@t3tools/contracts";
+
+import type { FwaiOrganizationDirectory } from "./organizationDirectory.ts";
 
 /** `/ask <username> <body>`: usernames have no spaces, the rest of the message is the body. */
 export function parseAskCommand(
@@ -126,4 +135,97 @@ function withTask(action: AgentProposedAction, task: string | undefined): AgentP
   const { task: _previous, ...rest } = action;
   const trimmed = task.trim();
   return trimmed === "" ? rest : { ...rest, task: trimmed };
+}
+
+/** The owner may point an approved send at another thread; the environment re-checks it. */
+export function withSendTarget(decision: AgentDecision, threadId: ThreadId | null): AgentDecision {
+  return threadId !== null &&
+    decision.decision === "accept" &&
+    decision.action.kind === "send_to_thread"
+    ? { ...decision, action: { ...decision.action, threadId } }
+    : decision;
+}
+
+/** Providers whose runtime can hold triage read-only; the server refuses any other. */
+export const PERSONAL_AGENT_READ_ONLY_DRIVERS: ReadonlySet<string> = new Set([
+  "codex",
+  "claudeAgent",
+]);
+/** Codex blocks writes and network but cannot confine reads to the allowed folders. */
+export const PERSONAL_AGENT_CONFINES_READS_DRIVERS: ReadonlySet<string> = new Set(["claudeAgent"]);
+
+interface AgentProviderChoice {
+  readonly instanceId: string;
+  readonly models: ReadonlyArray<{
+    readonly slug: string;
+    readonly isDefault?: boolean | undefined;
+  }>;
+}
+
+/**
+ * The provider and model the settings show: what the owner picked, else what the agent runs,
+ * else the first provider and its default model.
+ */
+export function chooseAgentModel<P extends AgentProviderChoice>(
+  providers: ReadonlyArray<P>,
+  picked: { readonly instanceId: string | null; readonly model: string | null },
+  state: Pick<PersonalAgentState, "providerInstanceId" | "modelSelection"> | null,
+): { readonly provider: P | undefined; readonly model: string | undefined } {
+  const provider =
+    providers.find(
+      (candidate) => candidate.instanceId === (picked.instanceId ?? state?.providerInstanceId),
+    ) ?? providers[0];
+  const running =
+    state?.modelSelection?.instanceId === provider?.instanceId
+      ? state?.modelSelection?.model
+      : null;
+  const model =
+    provider?.models.find((candidate) => candidate.slug === (picked.model ?? running))?.slug ??
+    defaultAgentModel(provider);
+  return { provider, model };
+}
+
+export function defaultAgentModel(provider: AgentProviderChoice | undefined): string | undefined {
+  return (
+    provider?.models.find((candidate) => candidate.isDefault === true)?.slug ??
+    provider?.models[0]?.slug
+  );
+}
+
+/** A project row's grant changed; `"inherit"` drops it back to the all-projects row. */
+export function withProjectGrant(
+  value: PersonalAgentPermissions,
+  projectId: ProjectId,
+  key: PersonalAgentProjectCapability,
+  mode: PersonalAgentGrantMode | "inherit",
+): PersonalAgentPermissions {
+  const current = value.projects.find((entry) => entry.projectId === projectId)?.grants ?? {};
+  const { [key]: _dropped, ...rest } = current;
+  const grants: PersonalAgentProjectOverrides =
+    mode === "inherit" ? rest : { ...rest, [key]: mode };
+  const others = value.projects.filter((entry) => entry.projectId !== projectId);
+  return {
+    ...value,
+    projects: Object.keys(grants).length === 0 ? others : [...others, { projectId, grants }],
+  };
+}
+
+/** Adds an absolute folder the agent may read; the same permissions when it is not one. */
+export function withExtraReadPath(
+  value: PersonalAgentPermissions,
+  path: string,
+): PersonalAgentPermissions {
+  const trimmed = path.trim().replace(/\/+$/u, "");
+  if (!trimmed.startsWith("/") || value.extraReadPaths.includes(trimmed)) return value;
+  return { ...value, extraReadPaths: [...value.extraReadPaths, trimmed] };
+}
+
+/** The organization member with exactly this username (a leading @ is fine), if any. */
+export async function findOrganizationMember(
+  directory: Pick<FwaiOrganizationDirectory, "searchMembers">,
+  username: string,
+) {
+  const wanted = username.trim().replace(/^@/u, "").toLowerCase();
+  const page = await directory.searchMembers({ q: wanted, limit: 20 }).catch(() => null);
+  return page?.members.find((candidate) => candidate.username.toLowerCase() === wanted);
 }

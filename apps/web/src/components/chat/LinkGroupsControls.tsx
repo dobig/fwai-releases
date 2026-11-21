@@ -51,7 +51,7 @@ import { Input } from "../ui/input";
 import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { isLiveLinkRun, linkPeerThreadIds } from "./linkGroups.logic";
+import { isLiveLinkRun, linkPeerThreadIds } from "@t3tools/client-runtime/link-groups";
 import { openLinkChainDialog, openLinkThreadsDialog } from "./linkGroupsDialogState";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";

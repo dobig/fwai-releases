@@ -63,6 +63,19 @@ const applyDevelopmentIconOverrides = Effect.fn("applyDevelopmentIconOverrides")
   yield* Effect.log("[cli] Applied development icon overrides to dist/client");
 });
 
+/** The voice page, the Silero model, and onnxruntime-web's WASM build, which it loads by path. */
+const copyVoiceAssets = Effect.fn("cli.copyVoiceAssets")(function* (target: string) {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  const serverDir = path.join(yield* RepoRoot, "apps/server");
+  yield* fs.copy(path.join(serverDir, "src/voice/assets"), target);
+  const ort = yield* fs.realPath(path.join(serverDir, "node_modules/onnxruntime-web/dist"));
+  for (const name of ["ort-wasm-simd-threaded.mjs", "ort-wasm-simd-threaded.wasm"]) {
+    yield* fs.copyFile(path.join(ort, name), path.join(target, name));
+  }
+  yield* Effect.log("[cli] Copied voice assets into dist/voice-assets");
+});
+
 const buildCmd = Command.make(
   "build",
   {
@@ -84,6 +97,8 @@ const buildCmd = Command.make(
           shell: false,
         }),
       );
+
+      yield* copyVoiceAssets(path.join(serverDir, "dist/voice-assets"));
 
       const webDist = path.join(repoRoot, "apps/web/dist");
       const clientTarget = path.join(serverDir, "dist/client");

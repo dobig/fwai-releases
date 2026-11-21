@@ -77,6 +77,7 @@ import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as PreviewAgentActivity from "./preview/PreviewAgentActivity.ts";
 import * as DesktopBrowserChannel from "./preview/DesktopBrowserChannel.ts";
 import * as ServerBrowserStream from "./preview/ServerBrowserStream.ts";
+import * as VoiceRoutes from "./voice/VoiceRoutes.ts";
 import * as PreviewBrowser from "./preview/PreviewBrowser.ts";
 import * as ProcessRunner from "./processRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
@@ -725,6 +726,7 @@ const layerMakeRoutes = Layer.mergeAll(
     AgentEnvelopeRoute.layer,
     DeviceHubProxy.layer,
     ServerBrowserStream.routeLayer,
+    VoiceRoutes.routeLayer,
     ServerHttp.layerStaticAndDevRoute,
     Ws.layer,
   ),

@@ -1,6 +1,15 @@
 import { useAtomValue } from "@effect/atom-react";
 import { isSharedEnvironmentEntry } from "@t3tools/client-runtime/connection";
 import {
+  chooseAgentModel,
+  defaultAgentModel,
+  findOrganizationMember,
+  PERSONAL_AGENT_CONFINES_READS_DRIVERS,
+  PERSONAL_AGENT_READ_ONLY_DRIVERS,
+  withExtraReadPath,
+  withProjectGrant,
+} from "@t3tools/client-runtime/sharing/personal-agent";
+import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
@@ -9,12 +18,10 @@ import {
   PERSONAL_AGENT_CAPABILITIES,
   type PersonalAgentGrantMode,
   type PersonalAgentProjectCapability,
-  type PersonalAgentProjectOverrides,
   PERSONAL_AGENT_INSTRUCTIONS_MAX_LENGTH,
   type EnvironmentId,
   type PersonalAgentPermissions,
   type PersonalAgentState,
-  type ProjectId,
   type ProviderInstanceId,
 } from "@t3tools/contracts";
 import { useEffect, useEffectEvent, useState } from "react";
@@ -39,11 +46,6 @@ import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
-
-/** Providers whose runtime can hold triage read-only; the server refuses any other. */
-const READ_ONLY_DRIVERS = new Set(["codex", "claudeAgent"]);
-/** Codex blocks writes and network but cannot confine reads to the ticked folders. */
-const CONFINES_READS_DRIVERS = new Set(["claudeAgent"]);
 
 const errorMessage = (error: unknown, fallback: string) =>
   error instanceof Error && error.message ? error.message : fallback;
@@ -161,7 +163,10 @@ function EnvironmentAgentSettings({ environmentId }: { readonly environmentId: E
   });
   const refreshRelay = useAtomCommand(personalAgent.refresh, { reportFailure: false });
   const providers = (useEnvironmentProviders().get(environmentId) ?? []).filter(
-    (provider) => provider.enabled && provider.installed && READ_ONLY_DRIVERS.has(provider.driver),
+    (provider) =>
+      provider.enabled &&
+      provider.installed &&
+      PERSONAL_AGENT_READ_ONLY_DRIVERS.has(provider.driver),
   );
   const [state, setState] = useState<PersonalAgentState | null>(null);
   const [draft, setDraft] = useState<PersonalAgentPermissions>(EMPTY_PERSONAL_AGENT_PERMISSIONS);
@@ -186,16 +191,11 @@ function EnvironmentAgentSettings({ environmentId }: { readonly environmentId: E
     void getState({ environmentId, input: {} }).then(applyOnOpen);
   }, [getState, environmentId]);
 
-  const chosen =
-    providers.find(
-      (provider) => provider.instanceId === (instanceId ?? state?.providerInstanceId),
-    ) ?? providers[0];
-  const currentModel =
-    state?.modelSelection?.instanceId === chosen?.instanceId ? state?.modelSelection?.model : null;
-  const model =
-    chosen?.models.find((candidate) => candidate.slug === (modelSlug ?? currentModel))?.slug ??
-    chosen?.models.find((candidate) => candidate.isDefault === true)?.slug ??
-    chosen?.models[0]?.slug;
+  const { provider: chosen, model } = chooseAgentModel(
+    providers,
+    { instanceId, model: modelSlug },
+    state,
+  );
 
   /** Applies at once while the agent runs; otherwise it is used when the agent is turned on. */
   const switchModel = async (nextInstanceId: ProviderInstanceId, nextModel: string | undefined) => {
@@ -286,7 +286,7 @@ function EnvironmentAgentSettings({ environmentId }: { readonly environmentId: E
         <SettingsRow
           title="Provider and model"
           description={
-            chosen !== undefined && !CONFINES_READS_DRIVERS.has(chosen.driver)
+            chosen !== undefined && !PERSONAL_AGENT_CONFINES_READS_DRIVERS.has(chosen.driver)
               ? "On Codex, a colleague's request can read any file your account can, not only what you allow below."
               : undefined
           }
@@ -300,11 +300,7 @@ function EnvironmentAgentSettings({ environmentId }: { readonly environmentId: E
                   setInstanceId(value);
                   setModelSlug(null);
                   if (next === undefined) return;
-                  void switchModel(
-                    next.instanceId,
-                    next.models.find((candidate) => candidate.isDefault === true)?.slug ??
-                      next.models[0]?.slug,
-                  );
+                  void switchModel(next.instanceId, defaultAgentModel(next));
                 }}
               >
                 <SelectTrigger aria-label="Agent provider" className="w-32" size="sm">
@@ -457,22 +453,6 @@ function ModeSelect<M extends string>({
 
 const GRANT_MODES: ReadonlyArray<PersonalAgentGrantMode> = ["auto", "ask", "deny"];
 
-function withProjectGrant(
-  value: PersonalAgentPermissions,
-  projectId: ProjectId,
-  key: PersonalAgentProjectCapability,
-  mode: PersonalAgentGrantMode | typeof INHERIT,
-): PersonalAgentPermissions {
-  const current = value.projects.find((entry) => entry.projectId === projectId)?.grants ?? {};
-  const { [key]: _dropped, ...rest } = current;
-  const grants: PersonalAgentProjectOverrides = mode === INHERIT ? rest : { ...rest, [key]: mode };
-  const others = value.projects.filter((entry) => entry.projectId !== projectId);
-  return {
-    ...value,
-    projects: Object.keys(grants).length === 0 ? others : [...others, { projectId, grants }],
-  };
-}
-
 /**
  * What a colleague's request may use. "All my projects" covers projects added later; a project
  * row overrides it per column.
@@ -491,9 +471,9 @@ function PermissionsEditor({
   );
   const [folder, setFolder] = useState("");
   const addFolder = (path: string) => {
-    const trimmed = path.trim().replace(/\/+$/u, "");
-    if (!trimmed.startsWith("/") || value.extraReadPaths.includes(trimmed)) return;
-    onChange({ ...value, extraReadPaths: [...value.extraReadPaths, trimmed] });
+    const next = withExtraReadPath(value, path);
+    if (next === value) return;
+    onChange(next);
     setFolder("");
   };
   const chooseFolder = async () => {
@@ -661,9 +641,7 @@ function BlockedPeopleSection({ blocked }: { readonly blocked: ReadonlyArray<str
   const [name, setName] = useState("");
   const block = async () => {
     if (directory === null) return;
-    const wanted = name.trim().replace(/^@/u, "").toLowerCase();
-    const page = await directory.searchMembers({ q: wanted, limit: 20 }).catch(() => null);
-    const member = page?.members.find((candidate) => candidate.username.toLowerCase() === wanted);
+    const member = await findOrganizationMember(directory, name);
     if (member === undefined) {
       toastManager.add({
         type: "error",

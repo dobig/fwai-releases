@@ -1,4 +1,4 @@
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+import type { EnvironmentThreadShell } from "./state/models.ts";
 import {
   EnvironmentId,
   LINK_MAX_MEMBERS,
@@ -26,8 +26,9 @@ import {
   type LinkGroupChoice,
   linkGroupChoices,
   linkPeerThreadIds,
+  linkSuggestions,
   NO_LINK_COMMAND_INPUT,
-} from "./linkGroups.logic";
+} from "./linkGroups.ts";
 
 const environmentId = EnvironmentId.make("env-1");
 const otherEnvironmentId = EnvironmentId.make("env-2");
@@ -572,5 +573,51 @@ describe("linkGroupChoices", () => {
     expect(choicesFor(false)[3]?.memberTitles).toEqual(["DB"]);
     // Setting a purpose makes the group holding both a valid choice.
     expect(choicesFor(true)[1]?.unavailable).toBeNull();
+  });
+});
+
+describe("linkSuggestions", () => {
+  const candidates = linkCandidates({
+    current: { environmentId, threadId: ThreadId.make("current") },
+    shells: [
+      shell("current", { title: "Release notes" }),
+      shell("local", { title: "Release checklist" }),
+      shell("child", { title: "Release subtask", subagent: true }),
+      shell("server", { title: "Release build", environmentId: otherEnvironmentId }),
+    ],
+    accountEnvironments: new Map([
+      [environmentId, { label: "Laptop", online: true }],
+      [otherEnvironmentId, { label: "Server", online: true }],
+    ]),
+    sharedThreads: [
+      { ...sharedThread("bobs"), title: "Release review" },
+      { ...sharedThread("bobs-view", { role: "viewer" }), title: "Release viewing" },
+    ],
+  });
+
+  it("matches titles across local, own-environment and collaborator threads", () => {
+    expect(
+      linkSuggestions(candidates, "release").map((candidate) => [
+        candidate.kind,
+        candidate.ref.threadId,
+      ]),
+    ).toEqual([
+      ["local", "local"],
+      ["own-environment", "server"],
+      ["shared", "bobs"],
+    ]);
+  });
+
+  it("leaves out the current thread, delegated children and view-only shares", () => {
+    const ids = linkSuggestions(candidates, "").map((candidate) => candidate.ref.threadId);
+    expect(ids).not.toContain("current");
+    expect(ids).not.toContain("child");
+    expect(ids).not.toContain("bobs-view");
+  });
+
+  it("matches a title being typed after the opening bracket", () => {
+    expect(linkSuggestions(candidates, "[release REV").map((c) => c.ref.threadId)).toEqual([
+      "bobs",
+    ]);
   });
 });
