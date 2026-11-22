@@ -173,7 +173,14 @@ export async function transcribe(
       if (isLast(decoded)) resolve();
     });
     ws.once("error", reject);
-    ws.once("close", () => resolve());
+    // Closing before the last packet is a failure, not an empty transcript.
+    ws.once("close", (code, reason) =>
+      reject(
+        new AsrError(
+          `豆包语音识别连接提前关闭 ${code} ${reason.toString("utf8")} (logid=${logid})`.trim(),
+        ),
+      ),
+    );
   });
   let failed: unknown;
   finished.catch((error) => {

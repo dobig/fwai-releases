@@ -210,4 +210,26 @@ describe("Doubao through the relay", () => {
       relay.close();
     }
   });
+
+  it("fails, rather than hearing nothing, when the connection closes before the last packet", async () => {
+    const server = NodeHttp.createServer();
+    const sockets = new WebSocketServer({ server });
+    sockets.on("connection", (socket) => socket.close(1011, "upstream gone"));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as { port: number };
+    try {
+      async function* mic() {
+        yield new Uint8Array(320);
+      }
+      await expect(
+        transcribe(
+          { ...DEFAULT_VOICE_CONFIG, relay: { url: `http://127.0.0.1:${port}`, credential: "c" } },
+          mic(),
+        ),
+      ).rejects.toThrow(/提前关闭/);
+    } finally {
+      sockets.close();
+      server.close();
+    }
+  });
 });
