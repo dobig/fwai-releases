@@ -19,7 +19,6 @@ import {
   threadReplayEncodedBytes,
   THREAD_RESUME_MAX_RAW_PAYLOAD_BYTES,
   THREAD_RESUME_MAX_REPLAY_ENCODED_BYTES,
-  THREAD_RESUME_MAX_REPLAY_EVENTS,
 } from "./ThreadStream.ts";
 import { projectDomainEventForWire } from "./WireProjection.ts";
 
@@ -111,12 +110,11 @@ function timelineProjection(itemCount: number): OrchestrationV2ThreadProjection 
 }
 
 describe("decideThreadResume", () => {
-  it("replays when the event count is within the bound", () => {
+  it("replays when the merged replay is within the byte bound", () => {
     expect(
       decideThreadResume({
         afterSequence: 10,
         highWater: 20_000,
-        replayEventCount: THREAD_RESUME_MAX_REPLAY_EVENTS,
         replayEncodedBytes: THREAD_RESUME_MAX_REPLAY_ENCODED_BYTES,
       }),
     ).toEqual({
@@ -131,7 +129,6 @@ describe("decideThreadResume", () => {
       decideThreadResume({
         afterSequence: 10,
         highWater: 11,
-        replayEventCount: 1,
         replayEncodedBytes: THREAD_RESUME_MAX_REPLAY_ENCODED_BYTES + 1,
       }),
     ).toEqual({ mode: "snapshot" });
@@ -142,7 +139,6 @@ describe("decideThreadResume", () => {
       decideThreadResume({
         afterSequence: 50,
         highWater: 40,
-        replayEventCount: 0,
         replayEncodedBytes: 0,
       }),
     ).toEqual({ mode: "snapshot" });
@@ -213,7 +209,6 @@ describe("decideThreadResume", () => {
       decideThreadResume({
         afterSequence: 9,
         highWater: 10,
-        replayEventCount: projectedReplay.length,
         replayEncodedBytes: projectedBytes,
       }),
     ).toEqual({ mode: "replay", afterSequence: 9, throughSequence: 10 });

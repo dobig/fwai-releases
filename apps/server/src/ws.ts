@@ -155,7 +155,8 @@ import {
   decideThreadResume,
   isThreadReplayRawPayloadSafe,
   threadReplayEncodedBytes,
-  THREAD_RESUME_MAX_REPLAY_EVENTS,
+  THREAD_RESUME_COMPARE_SNAPSHOT_BYTES,
+  THREAD_RESUME_MAX_RAW_EVENTS,
 } from "./orchestration-v2/ThreadStream.ts";
 import {
   buildBoundedThreadProjection,
@@ -168,6 +169,7 @@ import {
   projectThreadProjectionForWire,
 } from "./orchestration-v2/WireProjection.ts";
 import { dedupeSnapshotBodies } from "@t3tools/shared/orchestrationV2DedupedBodies";
+import { mergeThreadReplay } from "@t3tools/shared/orchestrationV2ReplayMerge";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as OrchestrationEventStore from "./persistence/OrchestrationEventStore.ts";
@@ -793,7 +795,9 @@ type ThreadResumeSnapshotReason =
   | "event-limit"
   | "raw-payload-limit"
   | "recreated"
-  | "encoded-limit";
+  | "removal"
+  | "encoded-limit"
+  | "smaller-snapshot";
 
 export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subscribeThread")(
   function* (input: {
@@ -864,7 +868,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
           threadId: input.threadId,
           afterSequence,
           throughSequence,
-          limit: THREAD_RESUME_MAX_REPLAY_EVENTS + 1,
+          limit: THREAD_RESUME_MAX_RAW_EVENTS + 1,
           // Downgrades can leave unknown rows; skip them and resume live from highWater so later events survive.
           skipUnknownEventTypes: true,
         })
@@ -891,9 +895,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
         ? Stream.make({ kind: "synchronized" as const })
         : Stream.empty;
 
-    const snapshotThenLive = Effect.fn("ws.orchestrationV2.threadSnapshotThenLive")(function* (
-      reason: ThreadResumeSnapshotReason,
-    ) {
+    const loadSnapshot = Effect.fn("ws.orchestrationV2.loadThreadSnapshot")(function* () {
       const useBoundedSnapshot = shouldUseBoundedThreadSnapshot(input);
       const snapshot = yield* (
         useBoundedSnapshot
@@ -913,7 +915,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
         ),
       );
       const { snapshotSequence } = snapshot;
-      const snapshotItem = useBoundedSnapshot
+      const item = useBoundedSnapshot
         ? buildBoundedThreadStreamSnapshot({
             ...snapshot,
             compactTurnItems: input.acceptCompactTurnItems === true,
@@ -928,6 +930,14 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
               projection: dedupeBodies ? dedupeSnapshotBodies(projection) : projection,
             };
           })();
+      return { item, snapshotSequence };
+    });
+
+    const snapshotThenLive = Effect.fn("ws.orchestrationV2.threadSnapshotThenLive")(function* (
+      reason: ThreadResumeSnapshotReason,
+      loaded?: Effect.Success<ReturnType<typeof loadSnapshot>>,
+    ) {
+      const { item: snapshotItem, snapshotSequence } = loaded ?? (yield* loadSnapshot());
       // Only resume fallbacks pay for measuring: a first open is a snapshot by design.
       yield* annotateResume(
         reason === "initial"
@@ -967,7 +977,7 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
           threadId: input.threadId,
           afterSequence: input.afterSequence,
           throughSequence: highWater,
-          maxEvents: THREAD_RESUME_MAX_REPLAY_EVENTS,
+          maxEvents: THREAD_RESUME_MAX_RAW_EVENTS,
         })
         .pipe(
           Effect.mapError(
@@ -979,13 +989,13 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
               }),
           ),
         );
-      // The count query stops at THREAD_RESUME_MAX_REPLAY_EVENTS + 1.
+      // The count query stops at THREAD_RESUME_MAX_RAW_EVENTS + 1.
       yield* annotateResume({
         event_count: stats.eventCount,
         raw_payload_bytes: stats.rawPayloadBytes,
       });
-      // Bound stored and projected payload bytes separately; neither bounds process memory.
-      if (stats.eventCount > THREAD_RESUME_MAX_REPLAY_EVENTS) {
+      // These bound what is read and decoded before merging; neither bounds process memory.
+      if (stats.eventCount > THREAD_RESUME_MAX_RAW_EVENTS) {
         return yield* snapshotThenLive("event-limit");
       }
       if (!isThreadReplayRawPayloadSafe(stats.rawPayloadBytes)) {
@@ -1005,22 +1015,33 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
         // Retained creation events may describe deleted threads; replace replay only if a snapshot exists.
         if (shell !== null) return yield* snapshotThenLive("recreated");
       }
-      const replay = yield* loadReplayThrough(input.afterSequence, highWater);
+      const raw = yield* loadReplayThrough(input.afterSequence, highWater);
+      const merged = mergeThreadReplay(raw);
+      if (merged.mode === "snapshot") {
+        return yield* snapshotThenLive("removal");
+      }
+      const replay = merged.items;
       const replayBytes = threadReplayEncodedBytes(replay);
+      yield* annotateResume({
+        replay_events: replay.length,
+        replay_bytes: replayBytes,
+      });
       const plan = decideThreadResume({
         afterSequence: input.afterSequence,
         highWater,
-        replayEventCount: replay.length,
         replayEncodedBytes: replayBytes,
       });
       if (plan.mode === "snapshot") {
         return yield* snapshotThenLive("encoded-limit");
       }
-      yield* annotateResume({
-        mode: "replay",
-        replay_events: replay.length,
-        replay_bytes: replayBytes,
-      });
+      // A snapshot replaces the client's paged-in history, so send one only when it is smaller.
+      if (replayBytes > THREAD_RESUME_COMPARE_SNAPSHOT_BYTES) {
+        const snapshot = yield* loadSnapshot();
+        if (threadReplayEncodedBytes([snapshot.item]) < replayBytes) {
+          return yield* snapshotThenLive("smaller-snapshot", snapshot);
+        }
+      }
+      yield* annotateResume({ mode: "replay" });
       return withLiveDedupe(
         Stream.concat(
           Stream.concat(rpcInitialItems(replay), completionMarker),
