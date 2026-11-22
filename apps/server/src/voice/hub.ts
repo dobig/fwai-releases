@@ -78,11 +78,19 @@ export interface VoiceConnection {
   close(): void;
 }
 
+/** A reply wait the client asked for, in seconds; anything else means the server's own. */
+function replyWindow(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(Math.max(value, 1), 15)
+    : undefined;
+}
+
 export class VoiceHub implements VoicePlayer {
   private readonly sockets = new Set<VoiceSocket>();
   private stopped = false;
   private busy = false;
   private cancelled = false;
+  private listening: EndOfSpeech | null = null;
   private frames = 0;
   private lastState = "";
   private readonly logger: Logger;
@@ -182,11 +190,13 @@ export class VoiceHub implements VoicePlayer {
             }
             mic = new Mic();
             const followup = message.followup ? String(message.followup) : null;
-            void this.runTurn(socket, mic, followup).catch((error) =>
-              this.logger.warn("voice turn failed", error),
+            void this.runTurn(socket, mic, followup, replyWindow(message.followupSeconds)).catch(
+              (error) => this.logger.warn("voice turn failed", error),
             );
             return;
           }
+          case "ready":
+            return this.listening?.restartStartTimeout(); // the beep has been heard
           case "stop":
             return endMic();
           case "inbox":
@@ -219,7 +229,12 @@ export class VoiceHub implements VoicePlayer {
   }
 
   /** One turn. `followup`: opened right after news from that session; silence is fine then. */
-  async runTurn(socket: VoiceSocket, mic: Mic, followup: string | null): Promise<void> {
+  async runTurn(
+    socket: VoiceSocket,
+    mic: Mic,
+    followup: string | null,
+    followupSeconds?: number,
+  ): Promise<void> {
     if (this.busy) return;
     this.busy = true;
     this.deps.speaker.hold();
@@ -230,7 +245,7 @@ export class VoiceHub implements VoicePlayer {
       heard = await this.listen(
         socket,
         mic,
-        followup ? this.deps.config().followupSeconds : undefined,
+        followup ? (followupSeconds ?? this.deps.config().followupSeconds) : undefined,
       );
     } catch (error) {
       if (this.cancelled) return;
@@ -271,6 +286,7 @@ export class VoiceHub implements VoicePlayer {
 
   private async listen(socket: VoiceSocket, mic: Mic, startTimeout: number | undefined) {
     const detector = await this.deps.endOfSpeech(startTimeout);
+    this.listening = detector;
     const toAsr = new Mic();
     const started = Date.now();
     let dead = false;
@@ -313,6 +329,7 @@ export class VoiceHub implements VoicePlayer {
       );
       return { text, detector, dead };
     } finally {
+      this.listening = null;
       mic.put(null);
       await watching;
     }

@@ -35,6 +35,23 @@ describe("EndOfSpeech", () => {
     expect(detector.heardSpeech).toBe(false);
   });
 
+  it("counts the wait for a first word from the beep once the client says it was heard", async () => {
+    const detector = new EndOfSpeech(null, 2, 1);
+    expect((await feedAll(detector, 80, 4)).at(-1)).toBeNull(); // 0.8 s, before the beep is heard
+    detector.restartStartTimeout();
+    expect((await feedAll(detector, 80, 4)).at(-1)).toBeNull(); // 0.8 s from the beep
+    expect(await detector.feed(chunk(80))).toBe("timeout"); // 1.0 s
+  });
+
+  it("does not restart the wait once the user is talking", async () => {
+    const detector = new EndOfSpeech(null, 1, 1);
+    await feedAll(detector, 50, 2); // room noise before speaking
+    await feedAll(detector, 3000, 3);
+    detector.restartStartTimeout();
+    expect(detector.heardSpeech).toBe(true);
+    expect((await feedAll(detector, 60, 5)).at(-1)).toBe("end"); // silence still ends the turn
+  });
+
   it("counts quieter voices after the user speaks as quiet", async () => {
     const detector = new EndOfSpeech(null, 1);
     await feedAll(detector, 50, 3);

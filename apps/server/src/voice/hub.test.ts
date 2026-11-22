@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { DEFAULT_VOICE_CONFIG } from "./config.ts";
 import { ASR_SAMPLE_RATE } from "./doubaoAsr.ts";
@@ -71,6 +71,8 @@ function setup(heard: string) {
     }
     return heard;
   };
+  const windows: Array<number | undefined> = [];
+  const detectors: Array<EndOfSpeech> = [];
   const hub = new VoiceHub({
     config: () => DEFAULT_VOICE_CONFIG,
     sessions,
@@ -84,11 +86,16 @@ function setup(heard: string) {
       recent: () => history,
     },
     transcribe,
-    endOfSpeech: async (startTimeout) => new EndOfSpeech(null, 0.4, startTimeout ?? 6),
+    endOfSpeech: async (startTimeout) => {
+      windows.push(startTimeout);
+      const detector = new EndOfSpeech(null, 0.4, startTimeout ?? 6);
+      detectors.push(detector);
+      return detector;
+    },
     version: "test",
     stalledSeconds: 0.05,
   });
-  return { hub, handled, history, speaker };
+  return { hub, handled, history, speaker, windows, detectors };
 }
 
 describe("noWords", () => {
@@ -192,5 +199,51 @@ describe("VoiceHub", () => {
     await hub.play(speech(), 24_000);
     expect([a.audio, b.audio]).toEqual([1, 1]);
     expect(a.types().slice(-2)).toEqual(["audio_start", "audio_stop"]);
+  });
+
+  it("waits as long as the app asked for a reply, within bounds", async () => {
+    const { hub, windows } = setup("");
+    const wait = async (followupSeconds?: unknown) => {
+      const before = windows.length;
+      const client = new Client();
+      const connection = hub.connect(client);
+      connection.receive(
+        JSON.stringify({
+          type: "start",
+          followup: "t1",
+          ...(followupSeconds === undefined ? {} : { followupSeconds }),
+        }),
+      );
+      await vi.waitFor(() => expect(windows.length).toBe(before + 1));
+      connection.receive(JSON.stringify({ type: "stop" }));
+      await vi.waitFor(() => expect(client.types()).toContain("nothing")); // the turn is over
+    };
+    await wait(4);
+    await wait(99);
+    await wait(0);
+    await wait("soon");
+    await wait();
+    expect(windows).toEqual([
+      4,
+      15,
+      1,
+      DEFAULT_VOICE_CONFIG.followupSeconds,
+      DEFAULT_VOICE_CONFIG.followupSeconds,
+    ]);
+  });
+
+  it("starts counting the reply wait when the app says the beep was heard", async () => {
+    const { hub, detectors } = setup("");
+    const client = new Client();
+    const connection = hub.connect(client);
+    connection.receive(JSON.stringify({ type: "start", followup: "t1", followupSeconds: 1 }));
+    await vi.waitFor(() => expect(detectors.length).toBe(1));
+    const [detector] = detectors;
+    for (let i = 0; i < 4; i++) expect(await detector!.feed(chunk(50))).toBeNull(); // 0.8 s
+    connection.receive(JSON.stringify({ type: "ready" }));
+    for (let i = 0; i < 4; i++) expect(await detector!.feed(chunk(50))).toBeNull(); // 0.8 s again
+    expect(await detector!.feed(chunk(50))).toBe("timeout");
+    connection.receive(JSON.stringify({ type: "stop" }));
+    await vi.waitFor(() => expect(client.types()).toContain("nothing"));
   });
 });
