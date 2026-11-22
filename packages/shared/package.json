@@ -403,6 +403,10 @@
       "types": "./src/orchestrationV2DedupedBodies.ts",
       "import": "./src/orchestrationV2DedupedBodies.ts"
     },
+    "./orchestrationV2ReplayMerge": {
+      "types": "./src/orchestrationV2ReplayMerge.ts",
+      "import": "./src/orchestrationV2ReplayMerge.ts"
+    },
     "./orchestrationV2Timeline": {
       "types": "./src/orchestrationV2Timeline.ts",
       "import": "./src/orchestrationV2Timeline.ts"

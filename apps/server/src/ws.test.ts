@@ -114,7 +114,7 @@ import * as EventStore from "./orchestration-v2/EventStore.ts";
 import * as ProjectionMaintenance from "./orchestration-v2/ProjectionMaintenance.ts";
 import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
-import { THREAD_RESUME_MAX_REPLAY_EVENTS } from "./orchestration-v2/ThreadStream.ts";
+import { THREAD_RESUME_MAX_RAW_EVENTS } from "./orchestration-v2/ThreadStream.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as OrchestrationEventStore from "./persistence/OrchestrationEventStore.ts";
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
@@ -814,6 +814,7 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
 const insertResumeMessages = Effect.fn("test.insertResumeMessages")(function* (
   threadId: ThreadId,
   count: number,
+  options?: { readonly sameMessage?: boolean; readonly padding?: number },
 ) {
   const sql = yield* SqlClient.SqlClient;
   const now = "2026-10-13T00:00:00.000Z";
@@ -828,12 +829,12 @@ const insertResumeMessages = Effect.fn("test.insertResumeMessages")(function* (
         ${now}, 'server', ${JSON.stringify({
           createdBy: "user",
           creationSource: "web",
-          id: `message:${version}`,
+          id: options?.sameMessage === true ? "message:streamed" : `message:${version}`,
           threadId,
           runId: null,
           nodeId: null,
           role: "user",
-          text: `message ${version}`,
+          text: `message ${version}${"x".repeat(options?.padding ?? 0)}`,
           attachments: [],
           streaming: false,
           createdAt: now,
@@ -904,12 +905,12 @@ it.effect("thread subscribe records how it resumed", () =>
     assert.isAbove(replay.replay_bytes as number, 0);
 
     const longThread = ThreadId.make("thread:resume-long");
-    const [start] = yield* insertResumeMessages(longThread, THREAD_RESUME_MAX_REPLAY_EVENTS + 2);
+    const [start] = yield* insertResumeMessages(longThread, THREAD_RESUME_MAX_RAW_EVENTS + 2);
     const snapshot = yield* subscribeThreadResume({ threadId: longThread, afterSequence: start! });
     assert.deepInclude(snapshot, {
       mode: "snapshot",
       reason: "event-limit",
-      event_count: THREAD_RESUME_MAX_REPLAY_EVENTS + 1,
+      event_count: THREAD_RESUME_MAX_RAW_EVENTS + 1,
     });
     assert.isAbove(snapshot.snapshot_bytes as number, 0);
 
@@ -918,10 +919,88 @@ it.effect("thread subscribe records how it resumed", () =>
   }).pipe(Effect.provide(ReplayTestLayer)),
 );
 
+it.effect("thread resume merges each entity's updates instead of sending a snapshot", () =>
+  Effect.gen(function* () {
+    const threadId = ThreadId.make("thread:resume-merged");
+    // More versions than the old 128-event limit, all of one message.
+    const sequences = yield* insertResumeMessages(threadId, 300, { sameMessage: true });
+    const afterSequence = sequences[0]! - 1;
+    assert.deepInclude(yield* subscribeThreadResume({ threadId, afterSequence }), {
+      mode: "replay",
+      event_count: 300,
+      replay_events: 1,
+    });
+
+    const items = yield* subscribeOrchestrationV2Thread({
+      threadId,
+      afterSequence,
+      requestCompletionMarker: true,
+    }).pipe(
+      Effect.flatMap((stream) =>
+        stream.pipe(
+          Stream.takeUntil((item) => item.kind === "synchronized"),
+          Stream.runCollect,
+        ),
+      ),
+      Effect.provideService(ThreadManagement.ThreadManagementService, {
+        ensureLegacyTranscript: () => Effect.void,
+        streamStoredEventsFrom: () => Stream.never,
+      } as unknown as ThreadManagement.ThreadManagementService["Service"]),
+    );
+    assert.deepEqual(
+      Array.from(items, (item) =>
+        item.kind === "event"
+          ? [item.sequence, item.event.type === "message.updated" ? item.event.payload.text : null]
+          : [item.kind],
+      ),
+      [[sequences[0]!, "message 299"], ["synchronized"]],
+    );
+  }).pipe(Effect.provide(ReplayTestLayer)),
+);
+
+it.effect("thread resume sends the snapshot when it is smaller than the merged replay", () =>
+  Effect.gen(function* () {
+    const threadId = ThreadId.make("thread:resume-large");
+    // Distinct messages do not merge; together they exceed the comparison threshold.
+    const [first] = yield* insertResumeMessages(threadId, 40, { padding: 8 * 1024 });
+    assert.deepInclude(yield* subscribeThreadResume({ threadId, afterSequence: first! - 1 }), {
+      mode: "snapshot",
+      reason: "smaller-snapshot",
+      replay_events: 40,
+    });
+  }).pipe(Effect.provide(ReplayTestLayer)),
+);
+
+it.effect("thread resume falls back to a snapshot when the missed range removes state", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const threadId = ThreadId.make("thread:resume-rollback");
+    const [first] = yield* insertResumeMessages(threadId, 2);
+    yield* sql`
+      INSERT INTO orchestration_events (
+        event_id, aggregate_kind, stream_id, stream_version, event_type,
+        occurred_at, actor_kind, payload_json, metadata_json, application_event_version
+      ) VALUES (
+        'rollback:0', 'thread', ${threadId}, 2, 'checkpoint.rollback-requested',
+        '2026-10-13T00:00:00.000Z', 'server', ${JSON.stringify({
+          scopeId: "checkpoint-scope:root",
+          checkpointId: "checkpoint:1",
+          requestedAt: "2026-10-13T00:00:00.000Z",
+        })}, '{}', 2
+      )
+    `;
+    assert.deepInclude(yield* subscribeThreadResume({ threadId, afterSequence: first! - 1 }), {
+      mode: "snapshot",
+      reason: "removal",
+      event_count: 3,
+    });
+  }).pipe(Effect.provide(ReplayTestLayer)),
+);
+
 // Compaction keeps the oldest and newest event per message, so a cursor older
 // than the deleted rows still replays each message where the client would
-// first have seen it (reducers append on first sight) and reaches the same
-// final state. No snapshot fallback is needed.
+// first have seen it (reducers append on first sight), merged to its final
+// state. No snapshot fallback is needed.
 it.effect("thread resume across compacted history keeps message order and final state", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -955,7 +1034,7 @@ it.effect("thread resume across compacted history keeps message order and final 
     const [first] = yield* insertMessage(0, "message:a", "a created");
     const [second] = yield* insertMessage(1, "message:b", "b created");
     yield* insertMessage(2, "message:a", "a superseded");
-    const [head] = yield* insertMessage(3, "message:a", "a final");
+    yield* insertMessage(3, "message:a", "a final");
     // thread.deleted is never superseded: clients switch on the event type.
     for (const version of [0, 1]) {
       yield* sql`
@@ -992,12 +1071,7 @@ it.effect("thread resume across compacted history keeps message order and final 
           ? [item.sequence, item.event.type === "message.updated" ? item.event.payload.text : null]
           : [item.kind],
       ),
-      [
-        [first!.sequence, "a created"],
-        [second!.sequence, "b created"],
-        [head!.sequence, "a final"],
-        ["synchronized"],
-      ],
+      [[first!.sequence, "a final"], [second!.sequence, "b created"], ["synchronized"]],
     );
   }).pipe(
     Effect.provide(

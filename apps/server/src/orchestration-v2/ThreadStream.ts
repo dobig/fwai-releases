@@ -12,12 +12,16 @@ import {
 } from "./threadHistoryPaging.ts";
 import { projectThreadProjectionForWire } from "./WireProjection.ts";
 
-export const THREAD_RESUME_MAX_REPLAY_EVENTS = 128;
+/** Raw events read for one resume before merging; about an hour of a busy run. */
+export const THREAD_RESUME_MAX_RAW_EVENTS = 2048;
 
 export const THREAD_RESUME_MAX_REPLAY_ENCODED_BYTES = 1_048_576;
 
 /** Decoded objects and temporary strings exceed stored JSON size, even before wire slimming. */
-export const THREAD_RESUME_MAX_RAW_PAYLOAD_BYTES = 1_048_576;
+export const THREAD_RESUME_MAX_RAW_PAYLOAD_BYTES = 4 * 1_048_576;
+
+/** Above this merged size a resume also builds the snapshot and sends the smaller one. */
+export const THREAD_RESUME_COMPARE_SNAPSHOT_BYTES = 256 * 1024;
 
 export function isThreadReplayRawPayloadSafe(rawPayloadBytes: number): boolean {
   return rawPayloadBytes <= THREAD_RESUME_MAX_RAW_PAYLOAD_BYTES;
@@ -90,16 +94,14 @@ export type ThreadResumePlan =
     }
   | { readonly mode: "snapshot" };
 
-/** Bound event count and encoded bytes; replace excessive replay with one current snapshot. */
+/** Bound the merged replay's encoded bytes; replace an excessive replay with one current snapshot. */
 export function decideThreadResume(input: {
   readonly afterSequence: number;
   readonly highWater: number;
-  readonly replayEventCount: number;
   readonly replayEncodedBytes: number;
 }): ThreadResumePlan {
   if (
     input.afterSequence > input.highWater ||
-    input.replayEventCount > THREAD_RESUME_MAX_REPLAY_EVENTS ||
     input.replayEncodedBytes > THREAD_RESUME_MAX_REPLAY_ENCODED_BYTES
   ) {
     return { mode: "snapshot" };

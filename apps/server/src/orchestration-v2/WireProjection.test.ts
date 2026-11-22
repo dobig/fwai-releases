@@ -28,6 +28,8 @@ import {
 } from "./WireProjection.ts";
 import { threadShellFromProjection } from "./ProjectionStore.ts";
 import { MAX_TOOL_OUTPUT_IMAGES, toolOutputImages } from "@t3tools/shared/toolOutput";
+import { restoreTurnItemBodies } from "@t3tools/shared/orchestrationV2DedupedBodies";
+import { mergeThreadReplay } from "@t3tools/shared/orchestrationV2ReplayMerge";
 
 const decodeTurnItem = Schema.decodeUnknownSync(OrchestrationV2TurnItem);
 const encodeTurnItemJson = Schema.encodeSync(OrchestrationV2TurnItemJson);
@@ -375,5 +377,33 @@ describe("live body deduper", () => {
   it("ships a reply whole when its message arrives after it", () => {
     const first = reply(1, "a");
     expect([first, message(2, "a")].map(makeLiveBodyDeduper())[0]).toBe(first);
+  });
+
+  it.each([
+    ["message first", [message(1, "a"), reply(2, "a"), message(3, "ab"), reply(4, "ab")]],
+    ["reply first", [reply(1, "a"), message(2, "a"), reply(3, "ab"), message(4, "ab")]],
+  ])("restores a merged resume replay's reply to its final text (%s)", (_order, raw) => {
+    const merged = mergeThreadReplay(raw);
+    if (merged.mode !== "replay") throw new Error("expected a merged replay");
+    const delivered = merged.items.map(makeLiveBodyDeduper());
+    // What the client holds when each item arrives: the messages delivered before it.
+    const texts = new Map<MessageId, string>();
+    const restored = delivered.flatMap((item) => {
+      if (item.kind !== "event") return [];
+      if (item.event.type === "message.updated") {
+        texts.set(item.event.payload.id, item.event.payload.text);
+        return [];
+      }
+      if (item.event.type !== "turn-item.updated") return [];
+      return [
+        restoreTurnItemBodies(item.event.payload, {
+          messageText: (id) => texts.get(id),
+          checkpointFiles: () => undefined,
+          subagent: () => undefined,
+        }),
+      ];
+    });
+    expect(delivered).toHaveLength(2);
+    expect(restored).toEqual([reply(4, "ab").event.payload]);
   });
 });
