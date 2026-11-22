@@ -75,6 +75,14 @@ export class EndOfSpeech {
     return this.probability;
   }
 
+  /**
+   * The client's beep has been heard: the wait for a first word counts from here, not from
+   * the first microphone frame, which reaches the server well before the beep reaches the user.
+   */
+  restartStartTimeout(): void {
+    if (!this.heardSpeech) this.elapsed = 0;
+  }
+
   async feed(chunk: Uint8Array): Promise<EndVerdict> {
     const samples = toInt16(chunk).length;
     if (samples === 0) return null;
