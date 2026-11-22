@@ -10,6 +10,7 @@ import {
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -43,6 +44,7 @@ const toVoiceThread = (shell: OrchestrationV2ThreadShell): VoiceThread => ({
   status: shell.activityRunStatus ?? shell.status,
   latestRunId: shell.latestRunId,
   itemCount: shell.itemCount,
+  updatedAt: DateTime.toEpochMillis(shell.updatedAt),
   pendingRequest: shell.pendingRuntimeRequest && {
     id: shell.pendingRuntimeRequest.id,
     kind: shell.pendingRuntimeRequest.kind,

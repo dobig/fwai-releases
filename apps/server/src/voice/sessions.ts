@@ -15,6 +15,10 @@ const ACTIVE_STATUSES: ReadonlySet<string> = new Set([
   "running",
 ]);
 
+/** Sessions the app lists, and the fewer given to the language model with each utterance. */
+const SESSIONS_SHOWN = 100;
+const SESSIONS_LISTED = 30;
+
 export interface VoiceThread {
   readonly threadId: string;
   readonly projectId: string;
@@ -24,6 +28,8 @@ export interface VoiceThread {
   readonly latestRunId: string | null;
   readonly itemCount: number;
   readonly pendingRequest: { readonly id: string; readonly kind: string } | null;
+  /** Last activity, in epoch milliseconds; sessions without one count as oldest. */
+  readonly updatedAt?: number;
 }
 
 /** What the brain needs from the environment; in-process in production, faked in tests. */
@@ -331,7 +337,7 @@ export class Sessions {
     const unread = new Map<string, number>();
     for (const notice of this.inbox)
       unread.set(notice.threadId, (unread.get(notice.threadId) ?? 0) + 1);
-    return this.ordered().map((t) => ({
+    return this.ordered(SESSIONS_SHOWN).map((t) => ({
       id: t.thread.threadId,
       name: this.name(t),
       title: t.thread.title,
@@ -635,11 +641,14 @@ export class Sessions {
     this.save();
   }
 
-  ordered(): Array<Tracked> {
+  /** Running or waiting first, then the current one, then the most recently active. */
+  ordered(limit = SESSIONS_LISTED): Array<Tracked> {
     const rank = (t: Tracked) =>
       (ACTIVE_STATUSES.has(t.thread.status) || t.thread.status === "waiting" ? 0 : 2) +
       (t.thread.threadId === this.current ? 0 : 1);
-    return [...this.tracked.values()].sort((a, b) => rank(a) - rank(b)).slice(0, 30);
+    return [...this.tracked.values()]
+      .sort((a, b) => rank(a) - rank(b) || (b.thread.updatedAt ?? 0) - (a.thread.updatedAt ?? 0))
+      .slice(0, limit);
   }
 
   /** `followup`: said right after that session's news, so it stands in for the current one. */
