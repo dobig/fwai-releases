@@ -404,6 +404,57 @@ describe("announcing", () => {
   });
 });
 
+describe("listing sessions", () => {
+  const at = (id: string, status: string, updatedAt?: number) =>
+    thread(status, "r1", {
+      threadId: id,
+      title: id,
+      ...(updatedAt === undefined ? {} : { updatedAt }),
+    });
+
+  it("puts what is running first, then the newest activity, not the oldest", () => {
+    const { sessions } = make();
+    sessions.observe(at("old", "idle", 1_000), "p");
+    sessions.observe(at("newest", "idle", 9_000), "p");
+    sessions.observe(at("running-old", "running", 500), "p");
+    sessions.observe(at("middle", "idle", 5_000), "p");
+    sessions.initialized = true;
+    expect(sessions.snapshot().map((row) => row.id)).toEqual([
+      "running-old",
+      "newest",
+      "middle",
+      "old",
+    ]);
+    sessions.select("old");
+    expect(sessions.snapshot().map((row) => row.id)).toEqual([
+      "running-old",
+      "old",
+      "newest",
+      "middle",
+    ]);
+  });
+
+  it("lists up to 100 in the app but gives the model only the newest 30", () => {
+    const { sessions } = make();
+    for (let i = 0; i < 120; i++) sessions.observe(at(`s${i}`, "idle", i), "p");
+    sessions.initialized = true;
+    const rows = sessions.snapshot();
+    expect(rows).toHaveLength(100);
+    expect(rows[0]!.id).toBe("s119");
+    expect(rows.at(-1)!.id).toBe("s20");
+    expect(sessions.ordered()).toHaveLength(30);
+    expect(sessions.ordered()[29]!.thread.threadId).toBe("s90");
+  });
+
+  it("can still switch to a session beyond what the model sees", () => {
+    const { sessions } = make();
+    for (let i = 0; i < 60; i++) sessions.observe(at(`s${i}`, "idle", i), "p");
+    sessions.initialized = true;
+    expect(sessions.select("s35")).toBe(true);
+    expect(sessions.current).toBe("s35");
+  });
+});
+
 describe("the current session", () => {
   it("changes only on an explicit switch, and survives a restart", async () => {
     const store = new MemoryStore();
