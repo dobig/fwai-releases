@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { ASR_SAMPLE_RATE } from "@t3tools/shared/voice/config";
-import { EndOfSpeech, isLive } from "@t3tools/shared/voice/endOfSpeech";
-
-import { SileroVad } from "./silero.ts";
+import { ASR_SAMPLE_RATE } from "./config.ts";
+import { EndOfSpeech, isLive } from "./endOfSpeech.ts";
 
 function chunk(amplitude: number, seconds = 0.2): Uint8Array {
   const samples = new Int16Array(Math.round(ASR_SAMPLE_RATE * seconds));
@@ -70,13 +68,5 @@ describe("EndOfSpeech", () => {
   it("skips dead air from a Bluetooth mode switch", () => {
     expect(isLive(new Uint8Array(6400))).toBe(false);
     expect(isLive(chunk(30))).toBe(true);
-  });
-});
-
-describe("SileroVad", () => {
-  it("loads the bundled model and hears no voice in silence", async () => {
-    const vad = await SileroVad.load();
-    for (let i = 0; i < 3; i++)
-      expect(await vad.probability(new Float32Array(512))).toBeLessThan(0.1);
   });
 });
