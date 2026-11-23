@@ -4,6 +4,7 @@ import * as Context from "effect/Context";
 import * as Scope from "effect/Scope";
 import * as ServerConfig from "../config.ts";
 import * as CodexManagedTokenBroker from "./CodexManagedTokenBroker.ts";
+import * as FwaiGatewayAuth from "../fwaiGateway/FwaiGatewayAuth.ts";
 import * as NodeHttp from "node:http";
 import * as NodeCrypto from "node:crypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -1818,6 +1819,45 @@ it.live("the private broker refuses another environment, instance, or sign-in pr
       });
       yield* h.broker.awaitIdle;
       assert.deepEqual(h.refreshTokens, ["single-use-refresh"]);
+    }),
+  ),
+);
+
+it.live("the private broker answers fwai Gateway token requests for its own environment only", () =>
+  provideBroker(
+    Effect.gen(function* () {
+      const environmentId = EnvironmentId.make("00000000-0000-4000-8000-0000000000a1");
+      const scope = yield* Scope.make();
+      yield* Effect.addFinalizer((exit) => Scope.close(scope, exit));
+      const context = yield* Layer.buildWithScope(CodexManagedTokenBroker.layer, scope).pipe(
+        Effect.provideService(ServerEnvironment.ServerEnvironmentIdentity, {
+          getEnvironmentId: Effect.succeed(environmentId),
+        }),
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.mock(FwaiGatewayAuth.FwaiGatewayAuth)({
+              accessToken: Effect.succeed("gateway-access"),
+            }),
+            ServerSecretStore.layer,
+          ),
+        ),
+        Effect.provideService(
+          HttpClient.HttpClient,
+          HttpClient.make(() => Effect.die("no ChatGPT traffic expected")),
+        ),
+      );
+      const broker = Context.get(context, CodexManagedTokenBroker.CodexManagedTokenBroker);
+      const endpoint = yield* broker.endpoint;
+      const request = { version: 1, kind: "fwai-gateway", environmentId };
+      const refused = yield* brokerClient(endpoint, {
+        ...request,
+        environmentId: EnvironmentId.make("00000000-0000-4000-8000-0000000000a2"),
+      });
+      assert.equal(yield* Effect.promise(() => refused.response), "");
+      const client = yield* brokerClient(endpoint, request);
+      assert.deepEqual(JSON.parse(yield* Effect.promise(() => client.response)), {
+        token: "gateway-access",
+      });
     }),
   ),
 );

@@ -8,6 +8,8 @@ import {
   type FwaiOrganizationDirectory,
 } from "@t3tools/client-runtime/sharing/organization-directory";
 import type { DesktopBridge } from "@t3tools/contracts";
+import * as FwaiGateway from "@t3tools/shared/fwaiGateway";
+import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { FetchHttpClient } from "effect/http";
 
@@ -113,4 +115,101 @@ export function getFwaiOrganizationDirectory(): FwaiOrganizationDirectory | null
     }),
   };
   return directory.directory;
+}
+
+/**
+ * Approves an environment's fwai Gateway sign-in code with this app's own account, so turning on
+ * gateway routing never asks the user to sign in again. Rejects when no account is signed in.
+ */
+export async function approveFwaiDeviceCode(userCode: string): Promise<void> {
+  const account = getFwaiAccountSession();
+  const accessToken = account === null ? null : await account.getAccessToken();
+  if (accessToken === null) throw new Error("Sign in to fwai first.");
+  const config = resolveCloudPublicConfig();
+  if (!config.gatewayUrl) throw new Error("This build has no fwai gateway.");
+  await Effect.runPromise(
+    FwaiGateway.approveDeviceCode(
+      { gatewayUrl: config.gatewayUrl, clientId: config.gatewayClientId },
+      accessToken,
+      userCode,
+    ).pipe(Effect.provide(gatewayHttpClient(window.desktopBridge))),
+  );
+}
+
+export interface FwaiPlanSummary {
+  readonly planLabel: string | null;
+  readonly fiveHourPercent: number | null;
+  readonly weeklyPercent: number | null;
+}
+
+/** The signed-in account's plan and quota use, or null when signed out or unreachable. */
+export async function fetchFwaiPlanSummary(): Promise<FwaiPlanSummary | null> {
+  const account = getFwaiAccountSession();
+  const accessToken = account === null ? null : await account.getAccessToken();
+  const config = resolveCloudPublicConfig();
+  if (accessToken === null || !config.gatewayUrl) return null;
+  const gateway = { gatewayUrl: config.gatewayUrl, clientId: config.gatewayClientId };
+  const exit = await Effect.runPromiseExit(
+    Effect.all(
+      [
+        FwaiGateway.getSubscription(gateway, accessToken).pipe(Effect.option),
+        FwaiGateway.getUsage(gateway, accessToken).pipe(Effect.option),
+      ],
+      { concurrency: 2 },
+    ).pipe(Effect.provide(gatewayHttpClient(window.desktopBridge))),
+  );
+  if (exit._tag === "Failure") return null;
+  const [subscription, usage] = exit.value;
+  const plan = subscription._tag === "Some" ? subscription.value.subscription : null;
+  const windows = usage._tag === "Some" ? usage.value : null;
+  return {
+    planLabel: plan?.active ? (plan.label ?? plan.tier ?? null) : null,
+    fiveHourPercent: windows?.five_hour?.utilization ?? null,
+    weeklyPercent: windows?.seven_day?.utilization ?? null,
+  };
+}
+
+export interface FwaiQuotaProject {
+  readonly id: string;
+  readonly name: string;
+  /** False when the account has no allowance here; the gateway would refuse its requests. */
+  readonly usable: boolean;
+  readonly fiveHourPercent: number | null;
+  readonly weeklyPercent: number | null;
+}
+
+export interface FwaiOrganizationQuota {
+  readonly organizationName: string;
+  /** The account's own default project on the gateway. */
+  readonly currentProjectId: string | null;
+  readonly projects: ReadonlyArray<FwaiQuotaProject>;
+}
+
+/** The account's organization projects and their quota use; null outside an organization. */
+export async function fetchFwaiOrganizationQuota(): Promise<FwaiOrganizationQuota | null> {
+  const account = getFwaiAccountSession();
+  const accessToken = account === null ? null : await account.getAccessToken();
+  const config = resolveCloudPublicConfig();
+  if (accessToken === null || !config.gatewayUrl) return null;
+  const exit = await Effect.runPromiseExit(
+    FwaiGateway.getOrganization(
+      { gatewayUrl: config.gatewayUrl, clientId: config.gatewayClientId },
+      accessToken,
+    ).pipe(Effect.provide(gatewayHttpClient(window.desktopBridge))),
+  );
+  if (exit._tag === "Failure" || exit.value.organization === null) return null;
+  return {
+    organizationName: exit.value.organization.name,
+    currentProjectId: exit.value.current_project_id ?? null,
+    projects: exit.value.projects
+      // An owner sees every project; requests may only name the ones they are in.
+      .filter((project) => project.member !== false)
+      .map((project) => ({
+        id: project.id,
+        name: project.name,
+        usable: project.has_allowance !== false,
+        fiveHourPercent: project.five_hour?.used_percent ?? null,
+        weeklyPercent: project.week?.used_percent ?? null,
+      })),
+  };
 }

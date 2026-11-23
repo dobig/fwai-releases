@@ -1,4 +1,5 @@
 import { SettingsGroup } from "./SettingsGroup";
+import { FwaiGatewaySettings } from "./FwaiGatewaySettings";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import {
   AuthSettingsWriteScope,
@@ -1033,6 +1034,7 @@ export function EnvironmentProviderSettings({
         {deviceTabs ? (
           <div className="flex min-h-11 min-w-0 items-center gap-2 px-3 sm:px-4">{deviceTabs}</div>
         ) : null}
+        {readOnly ? null : <FwaiGatewaySettings environmentId={environmentId} />}
         {readOnly ? (
           <SettingsGroup divided={false} className="overflow-hidden">
             <SettingsRow

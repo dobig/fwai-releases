@@ -32,6 +32,11 @@ const FWAI_ACCOUNT_PATHS = new Set([
   "/oauth/token",
   "/v1/account/logout",
   "/v1/auth/introspect",
+  // Approves this account's own environment for fwai Gateway routing without a second sign-in.
+  "/v1/oauth/device/approve",
+  // Plan and quota shown beside the fwai Gateway switch.
+  "/api/oauth/usage",
+  "/v1/subscription",
 ]);
 // The organization directory the share dialog reads (#20): read-only, and members takes a query.
 const FWAI_DIRECTORY_PATHS = new Map([

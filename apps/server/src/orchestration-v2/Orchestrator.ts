@@ -3180,8 +3180,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       command.type === "thread.archive" ||
       command.type === "thread.settle" ||
       (command.type === "thread.metadata.update" &&
-        command.worktreePath !== undefined &&
-        command.worktreePath !== thread.worktreePath);
+        ((command.worktreePath !== undefined && command.worktreePath !== thread.worktreePath) ||
+          (command.fwaiGatewayProjectId !== undefined &&
+            command.fwaiGatewayProjectId !== (thread.fwaiGatewayProjectId ?? null))));
     const providerContext = needsProviderState
       ? yield* projectionStore
           .getThreadProviderContext(
@@ -3466,6 +3467,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 : {}),
             ...(command.branch === undefined ? {} : { branch: command.branch }),
             ...(command.worktreePath === undefined ? {} : { worktreePath: command.worktreePath }),
+            ...(command.fwaiGatewayProjectId === undefined
+              ? {}
+              : { fwaiGatewayProjectId: command.fwaiGatewayProjectId }),
             ...(command.linkedPullRequest === undefined
               ? {}
               : {
@@ -3932,8 +3936,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       command.type === "thread.archive" || command.type === "thread.settle"
         ? (providerContext?.providerSessions ?? []).map((session) => session.id)
         : command.type === "thread.metadata.update" &&
-            command.worktreePath !== undefined &&
-            command.worktreePath !== thread.worktreePath
+            ((command.worktreePath !== undefined && command.worktreePath !== thread.worktreePath) ||
+              // Codex sends the quota project as a header fixed at launch, so it must restart.
+              (command.fwaiGatewayProjectId !== undefined &&
+                command.fwaiGatewayProjectId !== (thread.fwaiGatewayProjectId ?? null)))
           ? (providerContext?.providerSessions ?? []).map((session) => session.id)
           : command.type === "thread.runtime-mode.set"
             ? (providerContext?.providerSessions ?? [])
@@ -3972,7 +3978,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                     : command.type === "thread.settle"
                       ? "Thread settled."
                       : command.type === "thread.metadata.update"
-                        ? "Workspace changed."
+                        ? command.worktreePath !== undefined
+                          ? "Workspace changed."
+                          : "Quota project changed."
                         : command.type === "thread.runtime-mode.set"
                           ? "Runtime mode changed."
                           : "Provider or model selection changed.",
@@ -3991,7 +3999,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                     : command.type === "thread.settle"
                       ? "Thread settled."
                       : command.type === "thread.metadata.update"
-                        ? "Workspace changed."
+                        ? command.worktreePath !== undefined
+                          ? "Workspace changed."
+                          : "Quota project changed."
                         : command.type === "thread.runtime-mode.set"
                           ? "Runtime mode changed."
                           : "Provider or model selection changed.",

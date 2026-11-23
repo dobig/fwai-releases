@@ -1120,6 +1120,15 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed("paragraph" as const)),
   ),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /** Route Claude and new Codex threads through fwai Gateway with this environment's session. */
+  fwaiGatewayEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /** Which providers follow `fwaiGatewayEnabled`; each can stay on its own sign-in. */
+  fwaiGatewayClaude: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  fwaiGatewayCodex: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /** Organization project whose quota routed requests use by default; null uses the account's. */
+  fwaiGatewayProjectId: Schema.NullOr(TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   continueThreadsAfterServerUpdate: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(true)),
   ),
@@ -1473,6 +1482,10 @@ export const ServerSettingsPatch = Schema.Struct({
   worktreesDirectory: Schema.optionalKey(TrimmedString),
   responseStreamingMode: Schema.optionalKey(ResponseStreamingMode),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
+  fwaiGatewayEnabled: Schema.optionalKey(Schema.Boolean),
+  fwaiGatewayClaude: Schema.optionalKey(Schema.Boolean),
+  fwaiGatewayCodex: Schema.optionalKey(Schema.Boolean),
+  fwaiGatewayProjectId: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
   enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
   projectAgentBrowserAccessOverrides: Schema.optionalKey(

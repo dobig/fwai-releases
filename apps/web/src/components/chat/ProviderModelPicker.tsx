@@ -26,6 +26,7 @@ import {
 } from "./ComposerControl";
 import { useComposerMenuProps } from "./composerEventScope";
 import { shortcutLabelForCommand } from "../../keybindings";
+import { FwaiGatewayPickerControl, FwaiGatewayRouteBadge } from "./FwaiGatewayPickerControl";
 
 /** Holds the page still behind the open picker; its lifetime is the popup element's. */
 function lockBackgroundScroll(popup: HTMLElement | null) {
@@ -267,6 +268,12 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
               Unavailable
             </Badge>
           ) : null}
+          {!selectedEntries ? (
+            <FwaiGatewayRouteBadge
+              environmentId={props.environmentId}
+              driverKind={activeEntry?.driverKind}
+            />
+          ) : null}
         </span>
         <span aria-hidden="true" className="flex items-center">
           <ComposerControlChevron size={size} />
@@ -310,7 +317,13 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           onInstanceModelChange={handleInstanceModelChange}
         />
         {props.selectedModels === undefined ? (
-          <ChatGptSharingControl provider={activeEntry?.snapshot ?? null} />
+          <>
+            <ChatGptSharingControl provider={activeEntry?.snapshot ?? null} />
+            <FwaiGatewayPickerControl
+              environmentId={props.environmentId}
+              driverKind={activeEntry?.driverKind}
+            />
+          </>
         ) : null}
       </PopoverPopup>
     </Popover>

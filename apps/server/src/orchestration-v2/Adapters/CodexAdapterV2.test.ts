@@ -915,6 +915,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       Effect.void,
     onRequest: (method: string, params: unknown) => Effect.Effect<void> = () => Effect.void,
     readChildMetadata?: Parameters<typeof withCodexReplayChildMetadata>[2],
+    environment: NodeJS.ProcessEnv = {},
   ) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -957,7 +958,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       const adapter = yield* CodexAdapterV2.makeCodexAdapterV2({
         instanceId: CodexAdapterV2.CODEX_DEFAULT_INSTANCE_ID,
         settings: DEFAULT_CODEX_SETTINGS,
-        environment: {},
+        environment,
         clientFactory,
         crypto: yield* Crypto.Crypto,
         fileSystem,
@@ -1189,6 +1190,45 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           },
         },
       ]);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
+  );
+
+  it.effect("starts new threads on the fwai Gateway provider while routed", () =>
+    Effect.gen(function* () {
+      const requests: Array<unknown> = [];
+      const entries = codexReplayPreamble({
+        nativeThreadId: "gateway-thread",
+        nativeTurnId: "unused",
+        prompt: "unused",
+      }).slice(0, 5);
+      entries[3] = {
+        type: "expect_outbound",
+        label: "thread/start",
+        frame: {
+          id: 2,
+          method: "thread/start",
+          params: { config: CodexAdapterV2.CODEX_THREAD_CONFIG, modelProvider: "fwai_gateway" },
+        },
+      };
+      yield* makeCodexReplayHarness(
+        makeCodexReplayTranscript({ scenario: "fwai-gateway-thread-start", entries }),
+        () => Effect.void,
+        (method, params) =>
+          Effect.sync(() => {
+            if (method === "thread/start") requests.push(params);
+          }),
+        undefined,
+        { T3CODE_FWAI_GATEWAY_ROUTE: "1" },
+      );
+      assert.deepEqual(
+        requests.map((params) => (params as { modelProvider?: string }).modelProvider),
+        ["fwai_gateway"],
+      );
     }).pipe(
       Effect.scoped,
       Effect.provide(

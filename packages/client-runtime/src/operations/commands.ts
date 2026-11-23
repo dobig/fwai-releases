@@ -131,6 +131,8 @@ export interface UpdateThreadMetadataInput extends ThreadCommandInput {
   readonly regenerateTitle?: boolean;
   readonly linkedPullRequest?: ThreadLinkedPullRequest | null;
   readonly expectedEmpty?: boolean;
+  /** The thread's fwai Gateway quota project; null follows the environment default. */
+  readonly fwaiGatewayProjectId?: string | null;
 }
 
 export interface SetThreadRuntimeModeInput extends ThreadCommandInput {
@@ -614,7 +616,8 @@ export const updateThreadMetadata = Effect.fn("EnvironmentCommands.updateThreadM
       input.worktreePath !== undefined ||
       input.regenerateTitle !== undefined ||
       input.linkedPullRequest !== undefined ||
-      input.limitRecovery !== undefined
+      input.limitRecovery !== undefined ||
+      input.fwaiGatewayProjectId !== undefined
     ) {
       result = yield* dispatch({
         type: "thread.metadata.update",
@@ -629,6 +632,9 @@ export const updateThreadMetadata = Effect.fn("EnvironmentCommands.updateThreadM
         ...(input.linkedPullRequest === undefined
           ? {}
           : { linkedPullRequest: input.linkedPullRequest }),
+        ...(input.fwaiGatewayProjectId === undefined
+          ? {}
+          : { fwaiGatewayProjectId: input.fwaiGatewayProjectId }),
       });
     }
     if (input.modelSelection !== undefined) {
