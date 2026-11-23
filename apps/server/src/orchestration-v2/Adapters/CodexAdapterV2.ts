@@ -151,6 +151,11 @@ import {
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import { FWAI_MCP_SERVER_NAME } from "@t3tools/shared/fwaiMcpNames";
+import {
+  CODEX_GATEWAY_PROVIDER_ID,
+  FWAI_GATEWAY_PROJECT_ENV,
+  isFwaiGatewayRouted,
+} from "../../fwaiGateway/routeEnv.ts";
 
 const CODEX_PROVIDER = ProviderDriverKind.make("codex");
 export const CODEX_DRIVER_KIND = CODEX_PROVIDER;
@@ -850,8 +855,12 @@ function providerThreadFromCodexThread(input: {
     readonly updatedAt: number;
   };
   readonly forkedFrom?: OrchestrationV2ProviderThread["forkedFrom"];
+  readonly modelProviderId?: string;
 }): OrchestrationV2ProviderThread {
   return {
+    ...(input.modelProviderId
+      ? { nativeMetadata: { modelProviderId: input.modelProviderId } }
+      : {}),
     id: input.idAllocator.derive.providerThread({
       driver: CODEX_PROVIDER,
       nativeThreadId: input.thread.id,
@@ -1639,7 +1648,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           providerSessionId: input.providerSessionId,
           runtimePolicy: input.runtimePolicy,
           settings: resolvedRuntime?.config ?? adapterOptions.settings,
-          environment: resolvedRuntime?.environment ?? adapterOptions.environment,
+          environment: {
+            ...(resolvedRuntime?.environment ?? adapterOptions.environment),
+            // Read by the fwai Gateway provider's env_http_headers; ignored by every other provider.
+            ...(input.fwaiGatewayProjectId === undefined
+              ? {}
+              : { [FWAI_GATEWAY_PROJECT_ENV]: input.fwaiGatewayProjectId }),
+          },
         });
         const additionalContextByThread = yield* Ref.make(
           new Map<
@@ -6584,14 +6599,19 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             ensureInitialized.pipe(
               Effect.andThen(mcpSessions.read(threadInput.threadId)),
               Effect.flatMap((mcpSession) =>
-                client.request(
-                  "thread/start",
-                  codexThreadRuntimeParams({
+                client.request("thread/start", {
+                  ...codexThreadRuntimeParams({
                     mcpSession,
                     modelSelection: threadInput.modelSelection,
                     runtimePolicy: threadInput.runtimePolicy,
                   }),
-                ),
+                  // Resume keeps the provider the thread started with; only new threads switch.
+                  // Managed runtimes (resolveRuntime) launch without the gateway provider.
+                  ...(isFwaiGatewayRouted(adapterOptions.environment) &&
+                  adapterOptions.resolveRuntime === undefined
+                    ? { modelProvider: CODEX_GATEWAY_PROVIDER_ID }
+                    : {}),
+                }),
               ),
               Effect.map((response): OrchestrationV2ProviderThread =>
                 providerThreadFromCodexThread({
@@ -6601,6 +6621,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   providerSessionId: input.providerSessionId,
                   providerInstanceId: adapterOptions.instanceId,
                   thread: response.thread,
+                  modelProviderId: response.modelProvider,
                 }),
               ),
               Effect.mapError(

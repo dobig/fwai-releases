@@ -198,6 +198,12 @@ import {
   makeSubagentConversationArtifacts,
   subagentThreadTitle,
 } from "@t3tools/provider-core/server/subagentProjection";
+import {
+  claudeGatewaySettings,
+  resolveFwaiGatewayRoute,
+  withFwaiGatewayProject,
+} from "../../fwaiGateway/FwaiGatewayRoute.ts";
+import { fwaiGatewayProjectFor, isFwaiGatewayRouted } from "../../fwaiGateway/routeEnv.ts";
 
 export const CLAUDE_PROVIDER = ProviderDriverKind.make("claudeAgent");
 const CLAUDE_AGENT_SDK_QUERY_PROTOCOL = "claude-agent-sdk.query" as const;
@@ -4282,6 +4288,8 @@ export interface ClaudeAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
   readonly settings: ClaudeSettings;
   readonly environment: NodeJS.ProcessEnv;
+  /** Flag settings for every query; fwai Gateway routing puts its endpoint and key helper here. */
+  readonly sdkSettings?: ClaudeSdkSettings;
   readonly attachmentsDir: string;
   readonly fileSystem: FileSystem.FileSystem;
   readonly path: Path.Path;
@@ -9796,6 +9804,17 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             cwd: turnInput.runtimePolicy.cwd,
             attachmentsDir,
             settings: adapterOptions.settings,
+            ...(adapterOptions.sdkSettings === undefined
+              ? {}
+              : {
+                  sdkSettings: withFwaiGatewayProject(
+                    adapterOptions.sdkSettings,
+                    fwaiGatewayProjectFor(
+                      adapterOptions.environment,
+                      turnInput.appThread.fwaiGatewayProjectId,
+                    ),
+                  ),
+                }),
             environment: claudeQueryEnvironment(
               adapterOptions.environment,
               turnInput.appThread,
@@ -11088,10 +11107,21 @@ export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
       expandHomePath(config.binaryPath, yield* HostProcess.HomeDirectory),
       claudeEnvironment,
     );
+    const gatewaySettings = isFwaiGatewayRouted(claudeEnvironment)
+      ? yield* resolveFwaiGatewayRoute().pipe(
+          Effect.flatMap(
+            Option.match({
+              onNone: () => Effect.void,
+              onSome: claudeGatewaySettings,
+            }),
+          ),
+        )
+      : undefined;
     return yield* makeClaudeAdapterV2({
       instanceId,
       settings: { ...config, enabled, binaryPath },
       environment: claudeEnvironment,
+      ...(gatewaySettings === undefined ? {} : { sdkSettings: gatewaySettings }),
       attachmentsDir: serverConfig.attachmentsDir,
       fileSystem,
       path,

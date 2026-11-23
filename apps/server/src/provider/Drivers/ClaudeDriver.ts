@@ -3,6 +3,7 @@ import * as Cache from "effect/Cache";
 import * as Duration from "effect/Duration";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -61,6 +62,8 @@ import {
   resolveClaudeHomePath,
 } from "./ClaudeHome.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { resolveFwaiGatewayRoute } from "../../fwaiGateway/FwaiGatewayRoute.ts";
+import { isFwaiGatewayRouted } from "../../fwaiGateway/routeEnv.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
@@ -255,6 +258,13 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
       Effect.map((result) => result.capabilities),
     );
 
+    // A routed instance authenticates through the gateway, not the user's Claude sign-in.
+    const statusEnv = isFwaiGatewayRouted(processEnv)
+      ? Option.match(yield* resolveFwaiGatewayRoute(), {
+          onNone: () => processEnv,
+          onSome: (route) => ({ ...processEnv, ANTHROPIC_BASE_URL: route.gatewayUrl }),
+        })
+      : processEnv;
     const checkProvider = catalogService.refreshInBackground.pipe(
       Effect.andThen(
         modelCatalog.pipe(
@@ -262,7 +272,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
             checkClaudeProviderStatus(
               effectiveConfig,
               () => resolveCapabilities,
-              processEnv,
+              statusEnv,
               stateDir,
               catalog,
               scopedLimitNames,

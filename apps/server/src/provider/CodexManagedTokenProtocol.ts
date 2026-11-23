@@ -9,6 +9,12 @@ export const Request = Schema.Struct({
   environmentId: Schema.NonEmptyString,
   profileKey: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/u)),
 });
+/** fwai Gateway routing (Claude's apiKeyHelper, Codex's auth.command) asks the same listener. */
+export const GatewayRequest = Schema.Struct({
+  version: Schema.Literal(1),
+  kind: Schema.Literal("fwai-gateway"),
+  environmentId: Schema.NonEmptyString,
+});
 export const Response = Schema.Struct({ token: Schema.NonEmptyString });
 // Selectors are small; tokens can be larger JWTs. Never truncate either frame
 // into something that could be accepted.

@@ -112,6 +112,8 @@ export type FwaiGatewayIntrospection = typeof FwaiGatewayIntrospection.Type;
  * `GET /v1/me/organization`. With a fwai token an org owner gets every project, and `member`
  * marks their own; everyone else gets only their projects (llm_gateway#629).
  */
+const FwaiGatewayProjectWindow = Schema.Struct({ used_percent: Schema.Number });
+
 export const FwaiGatewayOrganizationResponse = Schema.Struct({
   organization: Schema.NullOr(
     Schema.Struct({
@@ -126,8 +128,15 @@ export const FwaiGatewayOrganizationResponse = Schema.Struct({
       name: Schema.String,
       // Gateways that predate llm_gateway#629 list only the caller's own projects.
       member: Schema.optional(Schema.Boolean),
+      // Quota fields, absent on gateways that predate them: whether the caller has an allowance
+      // here, and how much of each window is used (0-100).
+      has_allowance: Schema.optional(Schema.Boolean),
+      five_hour: Schema.optional(Schema.NullOr(FwaiGatewayProjectWindow)),
+      week: Schema.optional(Schema.NullOr(FwaiGatewayProjectWindow)),
     }),
   ),
+  /** The project the caller's requests draw on when they name none; null outside any. */
+  current_project_id: Schema.optional(Schema.NullOr(Schema.String)),
 });
 export type FwaiGatewayOrganizationResponse = typeof FwaiGatewayOrganizationResponse.Type;
 
@@ -174,6 +183,9 @@ export const FwaiGatewayOperation = Schema.Literals([
   "introspect",
   "deviceCode",
   "deviceToken",
+  "deviceApprove",
+  "usage",
+  "subscription",
   "organization",
   "organizationMembers",
 ]);
@@ -358,6 +370,78 @@ export const introspect = Effect.fn("fwaiGateway.introspect")(function* (
   );
   if (isOk(response)) return yield* decodeBody("introspect", response, FwaiGatewayIntrospection);
   return yield* failWithResponse("introspect", response);
+});
+
+/**
+ * `POST /v1/oauth/device/approve`: a signed-in client approves a device code for its own account,
+ * so an environment it controls gets a session without a second sign-in.
+ */
+export const approveDeviceCode = Effect.fn("fwaiGateway.approveDeviceCode")(function* (
+  config: FwaiGatewayConfig,
+  accessToken: string,
+  userCode: string,
+) {
+  const response = yield* execute(
+    "deviceApprove",
+    HttpClientRequest.post(gatewayUrl(config, "/v1/oauth/device/approve")).pipe(
+      HttpClientRequest.bearerToken(accessToken),
+      HttpClientRequest.bodyJsonUnsafe({ user_code: userCode, approve: true }),
+    ),
+  );
+  if (isOk(response)) {
+    yield* Effect.ignore(response.text);
+    return;
+  }
+  return yield* failWithResponse("deviceApprove", response);
+});
+
+const FwaiGatewayUsageWindow = Schema.NullOr(
+  Schema.Struct({ utilization: Schema.Number, resets_at: Schema.optional(Schema.String) }),
+);
+/** `GET /api/oauth/usage`: the account's quota use, 0-100 per window; null without a plan. */
+export const FwaiGatewayUsage = Schema.Struct({
+  five_hour: Schema.optional(FwaiGatewayUsageWindow),
+  seven_day: Schema.optional(FwaiGatewayUsageWindow),
+});
+export type FwaiGatewayUsage = typeof FwaiGatewayUsage.Type;
+
+/** `GET /v1/subscription`; only the fields fwai shows. */
+export const FwaiGatewaySubscription = Schema.Struct({
+  subscription: Schema.Struct({
+    active: Schema.Boolean,
+    tier: Schema.optional(Schema.String),
+    label: Schema.optional(Schema.String),
+    valid_until: Schema.optional(Schema.String),
+  }),
+});
+export type FwaiGatewaySubscription = typeof FwaiGatewaySubscription.Type;
+
+export const getUsage = Effect.fn("fwaiGateway.getUsage")(function* (
+  config: FwaiGatewayConfig,
+  accessToken: string,
+) {
+  const response = yield* execute(
+    "usage",
+    HttpClientRequest.get(gatewayUrl(config, "/api/oauth/usage")).pipe(
+      HttpClientRequest.bearerToken(accessToken),
+    ),
+  );
+  if (isOk(response)) return yield* decodeBody("usage", response, FwaiGatewayUsage);
+  return yield* failWithResponse("usage", response);
+});
+
+export const getSubscription = Effect.fn("fwaiGateway.getSubscription")(function* (
+  config: FwaiGatewayConfig,
+  accessToken: string,
+) {
+  const response = yield* execute(
+    "subscription",
+    HttpClientRequest.get(gatewayUrl(config, "/v1/subscription")).pipe(
+      HttpClientRequest.bearerToken(accessToken),
+    ),
+  );
+  if (isOk(response)) return yield* decodeBody("subscription", response, FwaiGatewaySubscription);
+  return yield* failWithResponse("subscription", response);
 });
 
 /** `GET /v1/me/organization`, with the user's fwai access token. */

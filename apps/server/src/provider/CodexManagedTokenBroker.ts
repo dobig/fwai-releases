@@ -11,9 +11,11 @@ import * as Effect from "effect/Effect";
 import * as FiberSet from "effect/FiberSet";
 import * as Layer from "effect/Layer";
 import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import * as Schema from "effect/Schema";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as FwaiGatewayAuth from "../fwaiGateway/FwaiGatewayAuth.ts";
 import { makeCodexChatGptAuth } from "./CodexChatGptAuth.ts";
 import * as Protocol from "./CodexManagedTokenProtocol.ts";
 
@@ -45,6 +47,7 @@ const io = <A>(f: () => Promise<A>) =>
 const acquireListener = Effect.gen(function* () {
   const identity = yield* ServerEnvironment.ServerEnvironmentIdentity;
   const environmentId = yield* identity.getEnvironmentId;
+  const gatewayAuth = yield* Effect.serviceOption(FwaiGatewayAuth.FwaiGatewayAuth);
   const platform = yield* HostProcess.Platform;
   const uid = yield* HostProcess.UserId;
   const owned = yield* Effect.acquireRelease(
@@ -116,11 +119,14 @@ const acquireListener = Effect.gen(function* () {
   // Keep branded validation here so the helper need not load the contracts graph.
   const decode = Schema.decodeUnknownEffect(
     Schema.fromJsonString(
-      Schema.Struct({
-        ...Protocol.Request.fields,
-        instanceId: ProviderInstanceId,
-        environmentId: EnvironmentId,
-      }),
+      Schema.Union([
+        Schema.Struct({
+          ...Protocol.Request.fields,
+          instanceId: ProviderInstanceId,
+          environmentId: EnvironmentId,
+        }),
+        Schema.Struct({ ...Protocol.GatewayRequest.fields, environmentId: EnvironmentId }),
+      ]),
     ),
     {
       onExcessProperty: "error",
@@ -149,6 +155,18 @@ const acquireListener = Effect.gen(function* () {
         runJob(
           Effect.scoped(
             Effect.gen(function* () {
+              if ("kind" in request) {
+                if (Option.isNone(gatewayAuth)) return;
+                const token = yield* gatewayAuth.value.accessToken.pipe(
+                  Effect.timeout(Protocol.COMMAND_TIMEOUT_MS),
+                );
+                yield* Protocol.writeFrame(
+                  socket,
+                  encodeResponse({ token }),
+                  Protocol.RESPONSE_BYTES,
+                );
+                return;
+              }
               const auth = yield* makeCodexChatGptAuth({
                 instanceId: request.instanceId,
                 expectedProfileKey: request.profileKey,

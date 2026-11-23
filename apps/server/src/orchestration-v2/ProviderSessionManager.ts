@@ -2109,9 +2109,14 @@ export const layerWithOptions = (
               });
               const sessionScope = yield* Scope.fork(sessionScopes);
               yield* agentScope.clear(input.threadId);
+              const fwaiGatewayProjectId = yield* projectionStore.getThread(input.threadId).pipe(
+                Effect.map((thread) => thread?.fwaiGatewayProjectId ?? undefined),
+                Effect.orElseSucceed(() => undefined),
+              );
               const runtime = yield* adapter
                 .openSession({
                   threadId: input.threadId,
+                  ...(fwaiGatewayProjectId === undefined ? {} : { fwaiGatewayProjectId }),
                   providerSessionId: input.providerSessionId,
                   modelSelection: input.modelSelection,
                   runtimePolicy: input.runtimePolicy,

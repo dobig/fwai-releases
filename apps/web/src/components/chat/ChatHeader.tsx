@@ -45,6 +45,10 @@ import { ThreadShareIndicator } from "../sharing/ThreadShareIndicator";
 import { isSharedEnvironmentAtom } from "~/state/sharing";
 import { LinkGroupsHeaderChip } from "./LinkGroupsControls";
 import { clearTitlebarControls } from "./titlebarClearance";
+import {
+  type FwaiGatewayThreadRoute,
+  FwaiGatewayThreadRouteTag,
+} from "./FwaiGatewayThreadRouteTag";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -53,6 +57,8 @@ interface ChatHeaderProps {
   isServerThread: boolean;
   activeProject: EnvironmentProject | null;
   parentThreadLink: { threadId: ThreadId; title: string } | null;
+  /** The Codex thread's fwai Gateway route, when known; null for other providers. */
+  fwaiGatewayRoute?: FwaiGatewayThreadRoute | null;
   onOpenThread: (threadId: ThreadId) => void;
   onNewThreadInProject: () => void;
   onOpenProjectSettings?: (() => void) | undefined;
@@ -77,6 +83,7 @@ export const ChatHeader = memo(function ChatHeader({
   isServerThread,
   activeProject,
   parentThreadLink,
+  fwaiGatewayRoute = null,
   onOpenThread,
   onNewThreadInProject,
   onOpenProjectSettings,
@@ -425,6 +432,12 @@ export const ChatHeader = memo(function ChatHeader({
       {isServerThread ? <ThreadShareIndicator threadRef={activeThreadRef} /> : null}
       {isServerThread ? <LinkGroupsHeaderChip threadRef={activeThreadRef} /> : null}
       {isServerThread ? <GuestShareIndicator threadRef={activeThreadRef} /> : null}
+      {fwaiGatewayRoute ? (
+        <FwaiGatewayThreadRouteTag
+          environmentId={activeThreadEnvironmentId}
+          route={fwaiGatewayRoute}
+        />
+      ) : null}
     </div>
   );
 });
