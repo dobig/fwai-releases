@@ -6,18 +6,10 @@
  */
 import * as NodeSqlite from "node:sqlite";
 
-import type { VoiceState, VoiceStateStore } from "./sessions.ts";
+import type { HistoryEvent, VoiceHistory } from "@t3tools/shared/voice/hub";
+import type { VoiceState, VoiceStateStore } from "@t3tools/shared/voice/sessions";
 
-export interface HistoryEvent {
-  readonly at: number;
-  /** "heard": what the user said; "said": an announcement. */
-  readonly kind: "heard" | "said";
-  readonly text: string;
-  /** Name of the session a heard line went to. */
-  readonly session: string | null;
-}
-
-export class VoiceStore implements VoiceStateStore {
+export class VoiceStore implements VoiceStateStore, VoiceHistory {
   private readonly db: NodeSqlite.DatabaseSync;
 
   constructor(path: string) {

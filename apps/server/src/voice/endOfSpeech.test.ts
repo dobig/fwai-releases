@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { ASR_SAMPLE_RATE } from "./doubaoAsr.ts";
-import { EndOfSpeech, isLive, SileroVad } from "./endOfSpeech.ts";
+import { ASR_SAMPLE_RATE } from "@t3tools/shared/voice/config";
+import { EndOfSpeech, isLive } from "@t3tools/shared/voice/endOfSpeech";
+
+import { SileroVad } from "./silero.ts";
 
 function chunk(amplitude: number, seconds = 0.2): Uint8Array {
   const samples = new Int16Array(Math.round(ASR_SAMPLE_RATE * seconds));

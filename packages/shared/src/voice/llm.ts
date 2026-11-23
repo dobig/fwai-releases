@@ -71,12 +71,13 @@ export class DoubaoLlm implements VoiceLlm {
       access.kind === "direct"
         ? `${config.llmBaseUrl.replace(/\/+$/, "")}/chat/completions`
         : `${access.base}/chat/completions`;
+    const auth =
+      access.kind === "direct"
+        ? { Authorization: `Bearer ${access.apiKey}` }
+        : await access.authorize("POST", url);
     const response = await fetch(url, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${access.kind === "direct" ? access.apiKey : access.credential}`,
-        "Content-Type": "application/json",
-      },
+      headers: { ...auth, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: config.llmModel,
         messages: [

@@ -3,27 +3,36 @@
  * The connected voice pages and apps and the spoken turns they start, transport-free.
  * The VoicePilot app speaks this protocol too: see docs/fwai/voice.md before changing it.
  */
+import type { Transcribe } from "./asr.ts";
 import type { VoiceConfig } from "./config.ts";
 import { type EndOfSpeech, isLive } from "./endOfSpeech.ts";
 import type { Logger, Sessions } from "./sessions.ts";
 import type { CueName, VoicePlayer } from "./speaker.ts";
-import type { VoiceStore } from "./store.ts";
+
+export interface HistoryEvent {
+  readonly at: number;
+  /** "heard": what the user said; "said": an announcement. */
+  readonly kind: "heard" | "said";
+  readonly text: string;
+  /** Name of the session a heard line went to. */
+  readonly session: string | null;
+}
+
+/** What was heard and said, so clients show it again after a reload. */
+export interface VoiceHistory {
+  add(kind: HistoryEvent["kind"], text: string, session?: string | null): void;
+  recent(): ReadonlyArray<HistoryEvent>;
+}
 
 export interface VoiceSocket {
   send(message: Record<string, unknown> | Uint8Array): void;
 }
 
-export type Transcribe = (
-  config: VoiceConfig,
-  chunks: AsyncIterable<Uint8Array>,
-  hotwords: ReadonlyArray<string>,
-) => Promise<string>;
-
 export interface HubDeps {
   readonly config: () => VoiceConfig;
   readonly sessions: Sessions;
   readonly speaker: { hold(): void; release(): void };
-  readonly store: Pick<VoiceStore, "add" | "recent">;
+  readonly store: VoiceHistory;
   readonly transcribe: Transcribe;
   /** A fresh end-of-speech detector per turn; `startTimeout` is set for reply windows. */
   readonly endOfSpeech: (startTimeout: number | undefined) => Promise<EndOfSpeech>;

@@ -5,8 +5,8 @@ import * as NodePath from "node:path";
 
 import { describe, expect, it } from "vite-plus/test";
 
-import { DEFAULT_VOICE_CONFIG } from "./config.ts";
-import type { Intent, SessionListing, VoiceLlm } from "./llm.ts";
+import { DEFAULT_VOICE_CONFIG } from "@t3tools/shared/voice/config";
+import type { Intent, SessionListing, VoiceLlm } from "@t3tools/shared/voice/llm";
 import {
   mentions,
   Sessions,
@@ -16,8 +16,8 @@ import {
   type VoiceStateStore,
   type VoiceT3,
   type VoiceThread,
-} from "./sessions.ts";
-import type { CueName, SpeakerPort } from "./speaker.ts";
+} from "@t3tools/shared/voice/sessions";
+import type { CueName, SpeakerPort } from "@t3tools/shared/voice/speaker";
 import { VoiceStore } from "./store.ts";
 
 class FakeSpeaker implements SpeakerPort {
