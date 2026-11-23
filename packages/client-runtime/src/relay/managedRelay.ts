@@ -340,6 +340,15 @@ export class ManagedRelayClient extends Context.Service<
     readonly authorizeSharedThreadEvents: (input: {
       readonly accountToken: string;
     }) => Effect.Effect<string, ManagedRelayClientError>;
+    /**
+     * A DPoP access token and a fresh proof for one call to the relay's voice routes
+     * (`/v1/voice/*`); the voice brain on the phone sends Doubao requests through them.
+     */
+    readonly authorizeVoice: (input: {
+      readonly accountToken: string;
+      readonly method: "GET" | "POST";
+      readonly url: string;
+    }) => Effect.Effect<ManagedRelayAuthorization, ManagedRelayClientError>;
     /** Whole-organization shares waiting for an org owner; fails with 403 for anyone else. */
     readonly listOrgShareRequests: (input: {
       readonly accountToken: string;
@@ -524,6 +533,7 @@ function disabledManagedRelayClient(relayUrl: string): ManagedRelayClient["Servi
     authorizeSharedThreadEvents: unavailable(
       "clientRuntime.managedRelay.authorizeSharedThreadEvents",
     ),
+    authorizeVoice: unavailable("clientRuntime.managedRelay.authorizeVoice"),
     listOrgShareRequests: unavailable("clientRuntime.managedRelay.listOrgShareRequests"),
     previewThreadInvite: unavailable("clientRuntime.managedRelay.previewThreadInvite"),
     acceptThreadInvite: unavailable("clientRuntime.managedRelay.acceptThreadInvite"),
@@ -1096,6 +1106,17 @@ export const make = Effect.fn("ManagedRelayClient.make")(function* (
         return url.href;
       },
       Effect.withSpan("clientRuntime.managedRelay.authorizeSharedThreadEvents"),
+      withRelayClientTracing,
+    ),
+    authorizeVoice: Effect.fnUntraced(
+      function* (input) {
+        return yield* authorize({
+          accountToken: input.accountToken,
+          scopes: [RelayEnvironmentConnectScope],
+          target: { method: input.method, url: input.url },
+        });
+      },
+      Effect.withSpan("clientRuntime.managedRelay.authorizeVoice"),
       withRelayClientTracing,
     ),
     listOrgShareRequests: Effect.fnUntraced(

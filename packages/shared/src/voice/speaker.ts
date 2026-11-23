@@ -1,6 +1,5 @@
 /** Announcement queue: speaks one message at a time and stays quiet while the user talks. */
-import type { VoiceConfig } from "./config.ts";
-import { TTS_SAMPLE_RATE } from "./doubaoTts.ts";
+import { TTS_SAMPLE_RATE, type VoiceConfig } from "./config.ts";
 
 /** Where speech goes: the connected pages and apps. */
 export interface VoicePlayer {

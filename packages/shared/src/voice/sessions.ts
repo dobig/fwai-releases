@@ -30,6 +30,8 @@ export interface VoiceThread {
   readonly pendingRequest: { readonly id: string; readonly kind: string } | null;
   /** Last activity, in epoch milliseconds; sessions without one count as oldest. */
   readonly updatedAt?: number;
+  /** Which computer it runs on, when the brain watches several. */
+  readonly computer?: string;
 }
 
 /** What the brain needs from the environment; in-process in production, faked in tests. */
@@ -152,6 +154,7 @@ export interface SessionRow {
   readonly statusText: string;
   readonly current: boolean;
   readonly unread: number;
+  readonly computer?: string;
 }
 
 const NOT_BORROWED = Symbol("not borrowed");
@@ -303,6 +306,24 @@ export class Sessions {
   name(tracked: Tracked): string {
     const alias = this.aliasesFor(tracked)[0];
     if (alias) return alias;
+    const base = this.baseName(tracked);
+    const computer = tracked.thread.computer;
+    if (!computer) return base;
+    // The computer is only said when another computer has a session that sounds the same.
+    for (const other of this.tracked.values()) {
+      if (
+        other !== tracked &&
+        other.thread.computer !== undefined &&
+        other.thread.computer !== computer &&
+        this.aliasesFor(other).length === 0 &&
+        this.baseName(other) === base
+      )
+        return `${computer}的${base}`;
+    }
+    return base;
+  }
+
+  private baseName(tracked: Tracked): string {
     const title =
       tracked.thread.title
         .replace(/[`*_#>[\]()]/g, "")
@@ -346,6 +367,7 @@ export class Sessions {
       statusText: STATUS_WORDS[t.thread.status] ?? t.thread.status,
       current: t.thread.threadId === this.current,
       unread: unread.get(t.thread.threadId) ?? 0,
+      ...(t.thread.computer === undefined ? {} : { computer: t.thread.computer }),
     }));
   }
 

@@ -109,6 +109,7 @@ const makeHarness = Effect.fn("RelaySharedThreadsTest.makeHarness")(function* (
       Ref.update(reads, (count) => count + 1).pipe(Effect.andThen(Ref.get(listed))),
     authorizeSharedThreadEvents: () =>
       Effect.succeed("wss://relay.example.test/v1/shared-threads/events"),
+    authorizeVoice: unused,
     listOrgShareRequests: () =>
       Effect.gen(function* () {
         yield* Ref.update(requestReads, (count) => count + 1);

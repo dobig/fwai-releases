@@ -5,8 +5,8 @@ import * as NodePath from "node:path";
 
 import { describe, expect, it } from "vite-plus/test";
 
-import { DEFAULT_VOICE_CONFIG } from "./config.ts";
-import type { Intent, SessionListing, VoiceLlm } from "./llm.ts";
+import { DEFAULT_VOICE_CONFIG } from "@t3tools/shared/voice/config";
+import type { Intent, SessionListing, VoiceLlm } from "@t3tools/shared/voice/llm";
 import {
   mentions,
   Sessions,
@@ -16,8 +16,8 @@ import {
   type VoiceStateStore,
   type VoiceT3,
   type VoiceThread,
-} from "./sessions.ts";
-import type { CueName, SpeakerPort } from "./speaker.ts";
+} from "@t3tools/shared/voice/sessions";
+import type { CueName, SpeakerPort } from "@t3tools/shared/voice/speaker";
 import { VoiceStore } from "./store.ts";
 
 class FakeSpeaker implements SpeakerPort {
@@ -411,6 +411,31 @@ describe("listing sessions", () => {
       title: id,
       ...(updatedAt === undefined ? {} : { updatedAt }),
     });
+
+  it("names the computer only when two computers have a session that sounds the same", () => {
+    const { sessions } = make();
+    sessions.observe(
+      thread("idle", "r1", { threadId: "a:1", computer: "公司电脑", title: "数据管线" }),
+      "p",
+    );
+    sessions.observe(
+      thread("idle", "r1", { threadId: "b:1", computer: "家里电脑", title: "改文档" }),
+      "p",
+    );
+    sessions.initialized = true;
+    expect(sessions.snapshot().map((row) => row.name)).toEqual(["数据管线", "改文档"]);
+    sessions.observe(
+      thread("idle", "r1", { threadId: "b:2", computer: "家里电脑", title: "数据管线" }),
+      "p",
+    );
+    expect(sessions.snapshot().map((row) => [row.name, row.computer])).toEqual(
+      expect.arrayContaining([
+        ["公司电脑的数据管线", "公司电脑"],
+        ["家里电脑的数据管线", "家里电脑"],
+        ["改文档", "家里电脑"],
+      ]),
+    );
+  });
 
   it("puts what is running first, then the newest activity, not the oldest", () => {
     const { sessions } = make();

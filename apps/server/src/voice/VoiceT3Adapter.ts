@@ -24,7 +24,7 @@ import * as ServerConfig from "../config.ts";
 import * as Project from "../project/ProjectService.ts";
 import * as DocumentText from "../provider/DocumentText.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { T3Error, type VoiceT3, type VoiceThread } from "./sessions.ts";
+import { T3Error, type VoiceT3, type VoiceThread } from "@t3tools/shared/voice/sessions";
 
 export class VoiceT3Refused extends Schema.TaggedError<VoiceT3Refused>()("VoiceT3Refused", {
   message: Schema.String,

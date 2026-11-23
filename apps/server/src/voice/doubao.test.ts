@@ -3,12 +3,10 @@ import * as NodeFS from "node:fs";
 import * as NodeHttp from "node:http";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import * as NodeZlib from "node:zlib";
 
 import { describe, expect, it } from "vite-plus/test";
 import { WebSocketServer } from "ws";
 
-import { DEFAULT_VOICE_CONFIG, doubaoAccess, loadVoiceConfig, type VoiceConfig } from "./config.ts";
 import {
   AUDIO_ONLY_REQUEST,
   decodeFrame,
@@ -18,17 +16,32 @@ import {
   FLAG_SEQUENCE,
   FULL_SERVER_RESPONSE,
   isLast,
-  transcribe,
-} from "./doubaoAsr.ts";
-import { JsonObjectSplitter, synthesize, TtsCache } from "./doubaoTts.ts";
-import { DoubaoLlm, extractJson } from "./llm.ts";
+} from "@t3tools/shared/voice/asr";
+import {
+  DEFAULT_VOICE_CONFIG,
+  doubaoAccess,
+  type VoiceConfig,
+  type VoiceRelay,
+} from "@t3tools/shared/voice/config";
+import { DoubaoLlm, extractJson } from "@t3tools/shared/voice/llm";
+import { decodeBase64, JsonObjectSplitter } from "@t3tools/shared/voice/tts";
+
+import { loadVoiceConfig } from "./config.ts";
+import { transcribe } from "./doubaoAsr.ts";
+import { synthesize, TtsCache } from "./doubaoTts.ts";
+
+/** The environment's view of the relay: bearer credential on every call. */
+const bearerRelay = (url: string, credential: string): VoiceRelay => ({
+  base: `${url.replace(/\/+$/, "")}/v1/environment/voice`,
+  authorize: async () => ({ Authorization: `Bearer ${credential}` }),
+});
 
 function serverFrame(payload: unknown, last: boolean): Buffer {
-  const body = NodeZlib.gzipSync(JSON.stringify(payload));
+  const body = Buffer.from(JSON.stringify(payload));
   const header = Buffer.from([
     0x11,
     (FULL_SERVER_RESPONSE << 4) | (last ? FLAG_LAST_WITH_SEQUENCE : FLAG_SEQUENCE),
-    0x11,
+    0x10,
     0,
   ]);
   const numbers = Buffer.alloc(8);
@@ -42,9 +55,9 @@ describe("Doubao speech recognition frames", () => {
     const frame = encodeFrame(AUDIO_ONLY_REQUEST, FLAG_LAST, Uint8Array.from([1, 2]), {
       json: false,
     });
-    expect([...frame.subarray(0, 4)]).toEqual([0x11, 0x22, 0x01, 0x00]);
-    const size = frame.readUInt32BE(4);
-    expect([...NodeZlib.gunzipSync(frame.subarray(8, 8 + size))]).toEqual([1, 2]);
+    expect([...frame.subarray(0, 4)]).toEqual([0x11, 0x22, 0x00, 0x00]);
+    expect(new DataView(frame.buffer).getUint32(4)).toBe(2);
+    expect([...frame.subarray(8)]).toEqual([1, 2]);
   });
 
   it("decodes a server response and an error", () => {
@@ -63,6 +76,12 @@ describe("Doubao speech recognition frames", () => {
 });
 
 describe("Doubao speech synthesis", () => {
+  it("decodes base64 without Buffer", () => {
+    const bytes = Uint8Array.from({ length: 300 }, (_, i) => (i * 7) % 256);
+    expect([...decodeBase64(Buffer.from(bytes).toString("base64"))]).toEqual([...bytes]);
+    expect([...decodeBase64("AQID")]).toEqual([1, 2, 3]);
+  });
+
   it("splits concatenated JSON objects however the stream is cut", () => {
     const splitter = new JsonObjectSplitter();
     expect(splitter.push('{"code":0,"data":"a}{"}{"co')).toEqual([{ code: 0, data: "a}{" }]);
@@ -154,15 +173,14 @@ async function fakeRelay(): Promise<{ url: string; seen: Array<Seen>; close: () 
 
 describe("Doubao through the relay", () => {
   it("prefers a local key, else the relay, else nothing", () => {
-    const relay = { url: "https://relay.test/", credential: "cred" };
+    const relay = bearerRelay("https://relay.test/", "cred");
     expect(doubaoAccess({ ...DEFAULT_VOICE_CONFIG, doubaoApiKey: "k", relay })).toEqual({
       kind: "direct",
       apiKey: "k",
     });
-    expect(doubaoAccess({ ...DEFAULT_VOICE_CONFIG, relay })).toEqual({
+    expect(doubaoAccess({ ...DEFAULT_VOICE_CONFIG, relay })).toMatchObject({
       kind: "relay",
       base: "https://relay.test/v1/environment/voice",
-      credential: "cred",
     });
     expect(doubaoAccess(DEFAULT_VOICE_CONFIG)).toBeNull();
   });
@@ -182,7 +200,7 @@ describe("Doubao through the relay", () => {
     try {
       const config: VoiceConfig = {
         ...DEFAULT_VOICE_CONFIG,
-        relay: { url: relay.url, credential: "cred" },
+        relay: bearerRelay(relay.url, "cred"),
       };
 
       const audio: Array<Uint8Array> = [];
@@ -223,7 +241,7 @@ describe("Doubao through the relay", () => {
       }
       await expect(
         transcribe(
-          { ...DEFAULT_VOICE_CONFIG, relay: { url: `http://127.0.0.1:${port}`, credential: "c" } },
+          { ...DEFAULT_VOICE_CONFIG, relay: bearerRelay(`http://127.0.0.1:${port}`, "c") },
           mic(),
         ),
       ).rejects.toThrow(/提前关闭/);
