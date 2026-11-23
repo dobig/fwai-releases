@@ -4,7 +4,8 @@ import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { Badge } from "../ui/badge";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
-export type FwaiGatewayThreadRoute = "gateway" | "direct";
+export type { FwaiGatewayThreadRoute } from "@t3tools/client-runtime/fwai-gateway";
+import type { FwaiGatewayThreadRoute } from "@t3tools/client-runtime/fwai-gateway";
 
 /**
  * A Codex thread keeps the provider it started on. While fwai Gateway routes Codex, a thread that

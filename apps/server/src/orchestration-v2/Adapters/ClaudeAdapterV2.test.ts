@@ -4920,6 +4920,47 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect("starts a fresh process after the API rejects a request with 400", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeWakeHarnessWithOptions({
+        close: (sdkMessages) => Queue.shutdown(sdkMessages),
+        freshQueueOnReopen: true,
+      });
+      const turnInput = makeClaudeTestTurnInput({
+        threadId: harness.threadId,
+        providerThread: harness.providerThread,
+        now: yield* DateTime.now,
+        attemptId: RunAttemptId.make("attempt-claude-bad-request"),
+        text: "Continue.",
+        attachments: [],
+      });
+      yield* harness.runtime.startTurn(turnInput);
+      yield* harness.offerAndWait(
+        makeResultFrame({
+          uuid: "00000000-0000-4000-8000-000000000610",
+          result: "API Error: 400 model not supported by this Claude Code version",
+          isError: true,
+          apiErrorStatus: 400,
+          terminalReason: "api_error",
+        }),
+      );
+      assert.equal((yield* Queue.take(harness.terminalReceipts)).status, "failed");
+
+      // The rejected request may come from the running CLI itself (e.g. one upgraded since it started).
+      yield* harness.runtime.startTurn({
+        ...turnInput,
+        attemptId: RunAttemptId.make("attempt-claude-after-bad-request"),
+        providerTurnOrdinal: 2,
+      });
+      assert.equal(harness.processQueues.length, 2);
+      assert.equal(harness.getOpenedOptions()?.resume, WAKE_NATIVE_SESSION);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
+  );
+
   const lastProviderTurn = (events: ReadonlyArray<ProviderAdapter.ProviderAdapterV2Event>) => {
     const event = events.findLast((candidate) => candidate.type === "provider_turn.updated");
     if (event?.type !== "provider_turn.updated") {
