@@ -14,24 +14,26 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 
+import {
+  DEFAULT_VOICE_CONFIG,
+  doubaoAccess,
+  type VoiceConfig,
+  type VoiceRelay,
+} from "@t3tools/shared/voice/config";
+import { EndOfSpeech } from "@t3tools/shared/voice/endOfSpeech";
+import { VoiceHub } from "@t3tools/shared/voice/hub";
+import { DoubaoLlm } from "@t3tools/shared/voice/llm";
+import { type Logger, Sessions } from "@t3tools/shared/voice/sessions";
+import { Speaker } from "@t3tools/shared/voice/speaker";
+
 import { authenticateMediaRequest } from "../auth/http.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { readRelayConnection } from "../cloud/config.ts";
 import * as ServerConfig from "../config.ts";
-import {
-  DEFAULT_VOICE_CONFIG,
-  doubaoAccess,
-  loadVoiceConfig,
-  type VoiceConfig,
-  type VoiceRelay,
-} from "./config.ts";
+import { loadVoiceConfig, RELAY_VOICE_PATH } from "./config.ts";
 import { transcribe } from "./doubaoAsr.ts";
 import { synthesize, TtsCache } from "./doubaoTts.ts";
-import { EndOfSpeech, loadSpeechDetector, voiceAssetsDir } from "./endOfSpeech.ts";
-import { VoiceHub } from "./hub.ts";
-import { DoubaoLlm } from "./llm.ts";
-import { type Logger, Sessions } from "./sessions.ts";
-import { Speaker } from "./speaker.ts";
+import { loadSpeechDetector, voiceAssetsDir } from "./silero.ts";
 import { VoiceStore } from "./store.ts";
 import * as VoiceT3Adapter from "./VoiceT3Adapter.ts";
 
@@ -42,13 +44,21 @@ const ACTIVE_AFTER_CLIENT_MILLIS = 24 * 60 * 60 * 1000;
 const RELAY_PROBE_MILLIS = 5 * 60 * 1000;
 const LAST_CLIENT_TOUCH_MILLIS = 10 * 60 * 1000;
 
+/** The relay's environment voice routes, with this environment's credential. */
+function environmentRelay(url: string, credential: string): VoiceRelay {
+  return {
+    base: `${url.replace(/\/+$/, "")}${RELAY_VOICE_PATH}`,
+    authorize: async () => ({ Authorization: `Bearer ${credential}` }),
+  };
+}
+
 /** Does the relay offer voice to this environment? `null` when it could not be asked. */
 async function probeRelay(relay: VoiceRelay): Promise<boolean | null> {
   const access = doubaoAccess({ ...DEFAULT_VOICE_CONFIG, relay });
   if (access?.kind !== "relay") return false;
   try {
     const response = await fetch(access.base, {
-      headers: { Authorization: `Bearer ${access.credential}` },
+      headers: await access.authorize("GET", access.base),
       signal: AbortSignal.timeout(10_000),
     });
     return response.status === 204;
@@ -86,6 +96,7 @@ const makeVoice = Effect.gen(function* () {
 
   // The relay link can appear, change or go away while the server runs.
   let relay: VoiceRelay | null = null;
+  let relayKey: string | null = null;
   let relayOffered = false;
   let probedKey: string | null = null;
   let probedAt = 0;
@@ -93,11 +104,14 @@ const makeVoice = Effect.gen(function* () {
   const refreshRelay = (): Promise<void> =>
     (refreshing ??= (async () => {
       const connection = await runPromise(readRelay).catch(() => null);
+      const key = connection ? `${connection.url}\n${connection.environmentCredential}` : null;
       const next = connection
-        ? { url: connection.url, credential: connection.environmentCredential }
+        ? environmentRelay(connection.url, connection.environmentCredential)
         : null;
-      const key = next ? `${next.url}\n${next.credential}` : null;
-      relay = next;
+      if (key !== relayKey) {
+        relay = next;
+        relayKey = key;
+      }
       if (loaded.doubaoApiKey) return; // calls Doubao directly
       if (key === null) {
         relayOffered = false;

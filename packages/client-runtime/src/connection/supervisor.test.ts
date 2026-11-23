@@ -905,6 +905,7 @@ describe("EnvironmentSupervisor", () => {
         getAgentActivitySnapshot: unused,
         listSharedThreads: unused,
         authorizeSharedThreadEvents: unused,
+        authorizeVoice: unused,
         listOrgShareRequests: unused,
         decideOrgShareRequest: unused,
         previewThreadInvite: unused,

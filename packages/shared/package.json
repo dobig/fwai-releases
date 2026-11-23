@@ -522,6 +522,38 @@
     "./cloneUrl": {
       "types": "./src/cloneUrl.ts",
       "import": "./src/cloneUrl.ts"
+    },
+    "./voice/asr": {
+      "types": "./src/voice/asr.ts",
+      "import": "./src/voice/asr.ts"
+    },
+    "./voice/config": {
+      "types": "./src/voice/config.ts",
+      "import": "./src/voice/config.ts"
+    },
+    "./voice/endOfSpeech": {
+      "types": "./src/voice/endOfSpeech.ts",
+      "import": "./src/voice/endOfSpeech.ts"
+    },
+    "./voice/hub": {
+      "types": "./src/voice/hub.ts",
+      "import": "./src/voice/hub.ts"
+    },
+    "./voice/llm": {
+      "types": "./src/voice/llm.ts",
+      "import": "./src/voice/llm.ts"
+    },
+    "./voice/sessions": {
+      "types": "./src/voice/sessions.ts",
+      "import": "./src/voice/sessions.ts"
+    },
+    "./voice/speaker": {
+      "types": "./src/voice/speaker.ts",
+      "import": "./src/voice/speaker.ts"
+    },
+    "./voice/tts": {
+      "types": "./src/voice/tts.ts",
+      "import": "./src/voice/tts.ts"
     }
   },
   "scripts": {

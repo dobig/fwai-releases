@@ -4,7 +4,7 @@
  * spoken utterance into a command, and turn a long agent reply into one or two
  * sentences that sound fine in an earpiece. Prompts are Chinese: so is the user.
  */
-import { doubaoAccess, type VoiceConfig } from "./config.ts";
+import { doubaoAccess, timeoutSignal, type VoiceConfig } from "./config.ts";
 
 const INTENT_PROMPT =
   '你是一个语音遥控器，帮用户用语音操作多个 AI 编程 session。\n根据用户说的话和当前 session 列表，输出一个 JSON 对象（只输出 JSON，不要解释）：\n\n{"action": "...", "session": <编号或 null>, "message": <字符串或 null>, "reply": <字符串或 null>}\n\naction 取值：\n- "send"：把用户的话发给某个 session，让那个 AI 去做或去回答。message 是要发给它的原文（去掉“告诉 xxx”“给 xxx 说”这类称呼部分，保留用户的原意和措辞，可以修正明显的语音识别错字）。\n- "answer"：回答某个 session 刚提出的问题（列表里状态是“在等你回答”的那个）。message 是回答的原文（比如“选第二个”“就用默认值”“可以，删掉”）。\n- "select"：把某个 session 设为当前 session，不下指令（“切到 zr33”“换成网关”“以后跟 2 号说”）。\n- "passive"：切换被动模式。打开（“打开被动模式”“别主动播了”“安静点，我问了再说”）message 填 "on"；关闭（“切回主动模式”“有进度直接播”）message 填 "off"。session 填 null。\n- "detail"：切换播报的详细程度。要详细（“详细模式”“说详细点”“念全一点，别删”）message 填 "on"；要简洁（“简洁模式”“说简短点”“只说重点”）message 填 "off"。session 填 null。\n- "current"：问现在的当前 session 是哪个（“现在是哪个”“当前 session 是谁”）。\n- "status"：问 session 的运行状态（“在干嘛”“怎么样了”“跑完没”“进度如何”；session 为 null 表示全部）。\n- "read"：要听 session 上一条回复的概括。只有用户明确提到“它说了/回复了/讲了什么”“再念一下它的回复”这类话时才用。\n- "read_full"：要听上一条回复的原文（“念一下完整的”“全文念一遍”）。\n- "stop"：中断某个 session 正在跑的任务。\n- "approve"：批准或拒绝某个 session 在等的权限请求（执行命令、改文件等）。批准（“批准”“同意”“可以，执行吧”“允许”）message 填 "accept"；拒绝（“拒绝”“不行”“别执行”）message 填 "decline"。没说是哪个 session 时填 null。\n- "list"：列出有哪些 session。\n- "new"：新开一个 session（“新开一个 session，……”“在 llm_gateway 里开个新的，……”“新建一个会话去查日志”）。message 是交给新 session 的任务（去掉“新开一个”这类说法）；用户说了项目就在 JSON 里加 "project": 项目列表里对应的名字，没说就填 null。session 填 null。\n- "undo"：撤回刚才发出去的那句话（“撤回”“撤销”“刚才那句不对”“刚才说错了”“取消刚才发的”）。session 填 null。\n- "alias"：给某个 session 起个名字（“把迁移部署那个叫部署”“给 2 号起个名叫网关”）。session 是被起名的那个，message 是新名字。\n- "repeat"：重播刚才播过的最后一条语音（“重播”“再说一遍”“刚才那条再播一下”“没听清”“刚才说的啥”）。\n- "inbox"：听其他 session 攒下的新通知（“听通知”“有什么通知”“念一下新消息”“网关的通知”）。点名了某个 session 就填它，否则 session 填 null。\n- "none"：明显不是在对你说话（自言自语、和旁人聊天）。reply 写一句简短的中文反问。\n\n怎么判断（最重要）：\n- 用户用“对 xx 说”“给 xx 说/发”“跟 xx 讲”“告诉 xx”点名开口时，一律是 "send"，message 是后面的话，哪怕那句话本身像是在问进度（“对数据生产说，情况怎么样？”→ send，message “情况怎么样？”）。只有不带这类说法的“xx 怎么样了”才是 status。\n- 默认是 "send"。用户问的任何具体问题（为什么、会不会、能不能、怎么、有什么问题、你觉得、测试过了吗……）、提的任何要求、发表的看法，都是要发给 session 的 AI 去回答或去做，用 "send"。\n- read / read_full / status / repeat / current / list / inbox / passive / detail / undo / alias / new / approve 只用于“关于 session 本身”的元操作，并且用户的话里要有对应的明确说法；拿不准时一律用 "send"，不要用 read，也不要用 none。\n- 例子：“按通话音质会有什么问题？”→ send；“为什么要等一秒多？”→ send；“测试都过了吗？”→ send；“你觉得用哪个方案好？”→ send；“它刚才说了啥”→ read；“网关怎么样了”→ status。\n\n选哪个 session：\n- session 用列表里的编号。用户可能用别名、标题里的关键词、项目名、谐音来指代 session，尽量匹配。\n- 用户没点名 session 时，send / read / read_full / stop 一律用“当前 session”，不要根据内容去猜别的 session。只有用户明确叫出另一个 session 的名字、别名或编号时才用别的。\n- 有 session 在等你回答、而用户的话像是在回答问题（选择、确认、提供信息）时，用 "answer"；没说是哪个 session 时，发给在等的那个。\n- 没有当前 session、用户也没点名时，session 填 null。\n';
@@ -71,12 +71,13 @@ export class DoubaoLlm implements VoiceLlm {
       access.kind === "direct"
         ? `${config.llmBaseUrl.replace(/\/+$/, "")}/chat/completions`
         : `${access.base}/chat/completions`;
+    const auth =
+      access.kind === "direct"
+        ? { Authorization: `Bearer ${access.apiKey}` }
+        : await access.authorize("POST", url);
     const response = await fetch(url, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${access.kind === "direct" ? access.apiKey : access.credential}`,
-        "Content-Type": "application/json",
-      },
+      headers: { ...auth, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: config.llmModel,
         messages: [
@@ -87,7 +88,7 @@ export class DoubaoLlm implements VoiceLlm {
         max_tokens: maxTokens,
         ...(config.llmDisableThinking ? { thinking: { type: "disabled" } } : {}),
       }),
-      signal: AbortSignal.timeout(30_000),
+      signal: timeoutSignal(30_000),
     });
     if (!response.ok)
       throw new LlmError(

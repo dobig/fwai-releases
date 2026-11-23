@@ -1,103 +1,17 @@
 // @effect-diagnostics nodeBuiltinImport:off globalFetch:off globalDate:off - plain-TS voice core, tested without an Effect runtime.
-/**
- * Doubao TTS 2.0 over the HTTP chunked streaming endpoint: the response is a run of
- * JSON objects, each carrying a base64 chunk of 24 kHz mono s16le PCM in `data`, so
- * playback can start before synthesis finishes.
- */
+/** Doubao TTS on the server: Node's fetch, plus an on-disk cache of short lines. */
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 
-import { doubaoAccess, type VoiceConfig } from "./config.ts";
+import type { VoiceConfig } from "@t3tools/shared/voice/config";
+import { makeSynthesize, type Synthesize } from "@t3tools/shared/voice/tts";
 
-export const TTS_SAMPLE_RATE = 24_000;
-const FINISHED_CODE = 20_000_000;
+export const synthesize: Synthesize = makeSynthesize(
+  (url, init) => fetch(url, init),
+  () => NodeCrypto.randomUUID(),
+);
 
-class TtsError extends Error {}
-
-export type Synthesize = (config: VoiceConfig, text: string) => AsyncIterable<Uint8Array>;
-
-export async function* synthesize(config: VoiceConfig, text: string): AsyncIterable<Uint8Array> {
-  const access = doubaoAccess(config);
-  if (!access) throw new TtsError("语音合成没有可用的豆包配置");
-  const response = await fetch(access.kind === "direct" ? config.ttsUrl : `${access.base}/tts`, {
-    method: "POST",
-    headers:
-      access.kind === "direct"
-        ? {
-            "X-Api-Key": access.apiKey,
-            "X-Api-Resource-Id": config.ttsResourceId,
-            "X-Api-Request-Id": NodeCrypto.randomUUID(),
-            "Content-Type": "application/json",
-          }
-        : { Authorization: `Bearer ${access.credential}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      user: { uid: "voice-pilot" },
-      req_params: {
-        text,
-        speaker: config.ttsSpeaker,
-        audio_params: {
-          format: "pcm",
-          sample_rate: TTS_SAMPLE_RATE,
-          speech_rate: config.ttsSpeechRate,
-        },
-        additions: JSON.stringify({ disable_markdown_filter: false }),
-      },
-    }),
-    signal: AbortSignal.timeout(60_000),
-  });
-  const logid = response.headers.get("X-Tt-Logid");
-  if (!response.ok || response.body === null) {
-    const detail = (await response.text()).slice(0, 300);
-    throw new TtsError(`豆包语音合成 HTTP ${response.status}: ${detail} (logid=${logid})`);
-  }
-  const splitter = new JsonObjectSplitter();
-  const decoder = new TextDecoder();
-  for await (const piece of response.body) {
-    for (const message of splitter.push(decoder.decode(piece, { stream: true }))) {
-      const {
-        code = 0,
-        data,
-        message: detail,
-      } = message as { code?: number; data?: string; message?: string };
-      if (code !== 0 && code !== FINISHED_CODE)
-        throw new TtsError(`豆包语音合成出错 ${code}: ${detail} (logid=${logid})`);
-      if (data) yield Buffer.from(data, "base64");
-    }
-  }
-}
-
-/** Splits a stream of concatenated JSON objects ("{...}{...}") as the text arrives. */
-export class JsonObjectSplitter {
-  private buffer = "";
-
-  push(text: string): Array<unknown> {
-    this.buffer += text;
-    const objects: Array<unknown> = [];
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
-    let start = -1;
-    let consumed = 0;
-    for (let i = 0; i < this.buffer.length; i++) {
-      const char = this.buffer[i];
-      if (inString) {
-        if (escaped) escaped = false;
-        else if (char === "\\") escaped = true;
-        else if (char === '"') inString = false;
-      } else if (char === '"') inString = true;
-      else if (char === "{") {
-        if (depth === 0) start = i;
-        depth++;
-      } else if (char === "}" && depth > 0 && --depth === 0) {
-        objects.push(JSON.parse(this.buffer.slice(start, i + 1)));
-        consumed = i + 1;
-      }
-    }
-    this.buffer = this.buffer.slice(consumed);
-    return objects;
-  }
-}
 // "没有新通知。", "数据生产有新通知。" come back again and again; each costs 0.7-1 s before
 // the first sound, and quota. Short lines are kept on disk as PCM.
 

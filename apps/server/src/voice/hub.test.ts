@@ -1,12 +1,17 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { DEFAULT_VOICE_CONFIG } from "./config.ts";
-import { ASR_SAMPLE_RATE } from "./doubaoAsr.ts";
-import { EndOfSpeech } from "./endOfSpeech.ts";
-import { Mic, noWords, VoiceHub, type Transcribe, type VoiceSocket } from "./hub.ts";
-import type { Intent, VoiceLlm } from "./llm.ts";
-import { Sessions, type VoiceT3 } from "./sessions.ts";
-import type { HistoryEvent } from "./store.ts";
+import { ASR_SAMPLE_RATE, DEFAULT_VOICE_CONFIG } from "@t3tools/shared/voice/config";
+import { EndOfSpeech } from "@t3tools/shared/voice/endOfSpeech";
+import type { Transcribe } from "@t3tools/shared/voice/asr";
+import {
+  Mic,
+  noWords,
+  VoiceHub,
+  type HistoryEvent,
+  type VoiceSocket,
+} from "@t3tools/shared/voice/hub";
+import type { Intent, VoiceLlm } from "@t3tools/shared/voice/llm";
+import { Sessions, type VoiceT3 } from "@t3tools/shared/voice/sessions";
 
 class Client implements VoiceSocket {
   messages: Array<Record<string, unknown>> = [];
