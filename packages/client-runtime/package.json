@@ -67,6 +67,10 @@
       "types": "./src/account/fwaiAccountSession.ts",
       "default": "./src/account/fwaiAccountSession.ts"
     },
+    "./fwai-gateway": {
+      "types": "./src/account/fwaiGateway.ts",
+      "default": "./src/account/fwaiGateway.ts"
+    },
     "./authorization": {
       "types": "./src/authorization/index.ts",
       "default": "./src/authorization/index.ts"
