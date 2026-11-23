@@ -4,7 +4,7 @@
  * JSON objects, each carrying a base64 chunk of 24 kHz mono s16le PCM in `data`, so
  * playback can start before synthesis finishes.
  */
-import { doubaoAccess, TTS_SAMPLE_RATE, type VoiceConfig } from "./config.ts";
+import { doubaoAccess, timeoutSignal, TTS_SAMPLE_RATE, type VoiceConfig } from "./config.ts";
 
 const FINISHED_CODE = 20_000_000;
 
@@ -53,7 +53,7 @@ export function makeSynthesize(doFetch: StreamingFetch, randomId: () => string):
           additions: JSON.stringify({ disable_markdown_filter: false }),
         },
       }),
-      signal: AbortSignal.timeout(60_000),
+      signal: timeoutSignal(60_000),
     });
     const logid = response.headers.get("X-Tt-Logid");
     if (!response.ok || response.body === null) {

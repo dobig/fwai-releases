@@ -185,6 +185,7 @@ const makeHarness = Effect.fn("TestRemoteAuthorization.makeHarness")(function* (
     getAgentActivitySnapshot: unexpected,
     listSharedThreads: unexpected,
     authorizeSharedThreadEvents: unexpected,
+    authorizeVoice: unexpected,
     listOrgShareRequests: unexpected,
     decideOrgShareRequest: unexpected,
     previewThreadInvite: unexpected,

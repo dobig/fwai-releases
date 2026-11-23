@@ -80,6 +80,7 @@ function createClient(overrides?: Partial<ManagedRelay.ManagedRelayClient["Servi
     getAgentActivitySnapshot: () => Effect.die("unused"),
     listSharedThreads: () => Effect.die("unused"),
     authorizeSharedThreadEvents: () => Effect.die("unused"),
+    authorizeVoice: () => Effect.die("unused"),
     listOrgShareRequests: () => Effect.die("unused"),
     decideOrgShareRequest: () => Effect.die("unused"),
     previewThreadInvite: () => Effect.die("unused"),

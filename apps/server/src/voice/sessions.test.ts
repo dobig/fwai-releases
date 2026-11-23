@@ -412,6 +412,31 @@ describe("listing sessions", () => {
       ...(updatedAt === undefined ? {} : { updatedAt }),
     });
 
+  it("names the computer only when two computers have a session that sounds the same", () => {
+    const { sessions } = make();
+    sessions.observe(
+      thread("idle", "r1", { threadId: "a:1", computer: "公司电脑", title: "数据管线" }),
+      "p",
+    );
+    sessions.observe(
+      thread("idle", "r1", { threadId: "b:1", computer: "家里电脑", title: "改文档" }),
+      "p",
+    );
+    sessions.initialized = true;
+    expect(sessions.snapshot().map((row) => row.name)).toEqual(["数据管线", "改文档"]);
+    sessions.observe(
+      thread("idle", "r1", { threadId: "b:2", computer: "家里电脑", title: "数据管线" }),
+      "p",
+    );
+    expect(sessions.snapshot().map((row) => [row.name, row.computer])).toEqual(
+      expect.arrayContaining([
+        ["公司电脑的数据管线", "公司电脑"],
+        ["家里电脑的数据管线", "家里电脑"],
+        ["改文档", "家里电脑"],
+      ]),
+    );
+  });
+
   it("puts what is running first, then the newest activity, not the oldest", () => {
     const { sessions } = make();
     sessions.observe(at("old", "idle", 1_000), "p");

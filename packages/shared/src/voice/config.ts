@@ -1,3 +1,4 @@
+// @effect-diagnostics globalTimers:off - plain-TS voice core, tested without an Effect runtime.
 /** Voice assistant settings, shared by the environment server and the mobile app. */
 
 export const ASR_SAMPLE_RATE = 16_000;
@@ -80,3 +81,11 @@ export const DEFAULT_VOICE_CONFIG: VoiceConfig = {
   newSessionMode: "full-access",
   aliases: {},
 };
+
+/** `AbortSignal.timeout`, which some JavaScript engines (older Hermes) lack. */
+export function timeoutSignal(ms: number): AbortSignal {
+  if (typeof AbortSignal.timeout === "function") return AbortSignal.timeout(ms);
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(new Error(`timed out after ${ms} ms`)), ms);
+  return controller.signal;
+}
