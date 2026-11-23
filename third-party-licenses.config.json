@@ -226,13 +226,6 @@
           ]
         }
       ]
-    },
-    {
-      "name": "Silero VAD model",
-      "bundles": ["desktop"],
-      "license": "MIT",
-      "sourceUrl": "https://github.com/snakers4/silero-vad",
-      "noticeFile": "apps/server/src/voice/assets/silero_vad.LICENSE"
     }
   ],
   "packageOverrides": [

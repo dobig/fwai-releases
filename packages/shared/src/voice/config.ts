@@ -35,10 +35,7 @@ export interface VoiceConfig {
 }
 
 export interface VoiceRelay {
-  /**
-   * Where the voice routes are: `<relay>/v1/environment/voice` for an environment server,
-   * `<relay>/v1/voice` for the mobile app.
-   */
+  /** Where the relay's voice routes are: `<relay>/v1/voice`. */
   readonly base: string;
   /**
    * Headers that authenticate one call: a bearer credential, or a DPoP token with a proof
