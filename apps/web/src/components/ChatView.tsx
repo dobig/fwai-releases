@@ -1,3 +1,4 @@
+import { activeThreadDriver, fwaiGatewayRouteOf } from "../fwaiGateway/threadRoute";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { ScrollToEndButton, WorkspaceFileDropOverlay } from "./chat/TimelineOverlays";
 import { usePasteToFocusComposer } from "./chat/usePasteToFocusComposer";
@@ -532,6 +533,14 @@ export default function ChatView(props: ChatViewProps) {
   const activeProviderThread = serverProjection?.providerThreads.find(
     (thread) => thread.id === serverProjection.thread.activeProviderThreadId,
   );
+  const fwaiGatewayThread =
+    serverProjection === null
+      ? null
+      : {
+          driver: activeProviderThread?.driver ?? activeThreadDriver(serverProjection.thread),
+          codexRoute: fwaiGatewayRouteOf(activeProviderThread),
+          projectId: serverProjection.thread.fwaiGatewayProjectId ?? null,
+        };
   const activeThreadLiveTokenUsage = latestProviderTurnTokenUsage(
     serverProjection?.providerTurns ?? [],
     serverProjection,
@@ -3211,6 +3220,7 @@ export default function ChatView(props: ChatViewProps) {
             activeThreadTitle={activeThread.title}
             activeProject={activeProject ?? null}
             parentThreadLink={parentThreadLink}
+            fwaiGatewayRoute={fwaiGatewayRouteOf(activeProviderThread)}
             onOpenThread={onOpenRelatedThreadStable}
             onNewThreadInProject={handleNewThreadInActiveProjectStable}
             {...(activeDraftLogicalProjectKey
@@ -3808,6 +3818,7 @@ export default function ChatView(props: ChatViewProps) {
               environmentId={activeThread.environmentId}
               threadId={activeThread.id}
               projectId={activeThread.projectId}
+              fwaiGateway={fwaiGatewayThread}
               worktreePath={activeThread.worktreePath}
               isServerThread={isServerThread}
               {...(draftId ? { draftId } : {})}

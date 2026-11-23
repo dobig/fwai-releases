@@ -29,6 +29,11 @@ import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
 import { NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
+  FwaiGatewayConnectResult,
+  FwaiGatewayConnectionState,
+  FwaiGatewayRpcError,
+} from "./fwaiGateway.ts";
+import {
   CodexAuthCallbackInput,
   CodexAuthCallbackState,
   ProviderAuthCancelInput,
@@ -449,6 +454,9 @@ export const WS_METHODS = {
   chatGptImportProfile: "provider.chatgpt.import-profile",
   chatGptHandoffSubscribe: "provider.chatgpt.handoff.subscribe",
   codexAuthCallbackSubscribe: "provider.codex.auth-callback.subscribe",
+  fwaiGatewaySubscribe: "fwai.gateway.subscribe",
+  fwaiGatewayConnect: "fwai.gateway.connect",
+  fwaiGatewayDisconnect: "fwai.gateway.disconnect",
   providerAuthRespond: "provider.auth.respond",
   providerAuthCancel: "provider.auth.cancel",
   providerAuthLogout: "provider.auth.logout",
@@ -727,6 +735,21 @@ const WsChatGptHandoffSubscribeRpc = Rpc.make(WS_METHODS.chatGptHandoffSubscribe
   success: ChatGptHandoffState,
   error: ProviderSetupRpcError,
   stream: true,
+});
+const WsFwaiGatewaySubscribeRpc = Rpc.make(WS_METHODS.fwaiGatewaySubscribe, {
+  payload: Schema.Struct({}),
+  success: FwaiGatewayConnectionState,
+  error: FwaiGatewayRpcError,
+  stream: true,
+});
+const WsFwaiGatewayConnectRpc = Rpc.make(WS_METHODS.fwaiGatewayConnect, {
+  payload: Schema.Struct({}),
+  success: FwaiGatewayConnectResult,
+  error: FwaiGatewayRpcError,
+});
+const WsFwaiGatewayDisconnectRpc = Rpc.make(WS_METHODS.fwaiGatewayDisconnect, {
+  payload: Schema.Struct({}),
+  error: FwaiGatewayRpcError,
 });
 const WsCodexAuthCallbackSubscribeRpc = Rpc.make(WS_METHODS.codexAuthCallbackSubscribe, {
   payload: CodexAuthCallbackInput,
@@ -2091,6 +2114,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsChatGptImportProfileRpc,
   WsChatGptHandoffSubscribeRpc,
   WsCodexAuthCallbackSubscribeRpc,
+  WsFwaiGatewaySubscribeRpc,
+  WsFwaiGatewayConnectRpc,
+  WsFwaiGatewayDisconnectRpc,
   WsProviderAuthRespondRpc,
   WsProviderAuthCancelRpc,
   WsProviderAuthLogoutRpc,

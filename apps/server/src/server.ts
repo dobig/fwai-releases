@@ -77,7 +77,6 @@ import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as PreviewAgentActivity from "./preview/PreviewAgentActivity.ts";
 import * as DesktopBrowserChannel from "./preview/DesktopBrowserChannel.ts";
 import * as ServerBrowserStream from "./preview/ServerBrowserStream.ts";
-import * as VoiceRoutes from "./voice/VoiceRoutes.ts";
 import * as PreviewBrowser from "./preview/PreviewBrowser.ts";
 import * as ProcessRunner from "./processRunner.ts";
 import * as GitManager from "./git/GitManager.ts";
@@ -88,6 +87,7 @@ import * as ServerOwnership from "./serverOwnership.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import * as ServerSettings from "./serverSettings.ts";
+import * as FwaiGatewayAuth from "./fwaiGateway/FwaiGatewayAuth.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
 import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
 import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts";
@@ -671,6 +671,7 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   Layer.provideMerge(Layer.mergeAll(NativeAppIconResolver.layer, layerProjectFaviconResolver)),
   Layer.provideMerge(layerRepositoryIdentityResolver),
   Layer.provideMerge(CodexManagedTokenBroker.layer),
+  Layer.provideMerge(FwaiGatewayAuth.layer.pipe(Layer.provide(layerServerSettings))),
   Layer.provideMerge(layerServerEnvironment),
   Layer.provideMerge(layerAuth),
   Layer.provideMerge(ServerSecretStore.layer),
@@ -726,7 +727,6 @@ const layerMakeRoutes = Layer.mergeAll(
     AgentEnvelopeRoute.layer,
     DeviceHubProxy.layer,
     ServerBrowserStream.routeLayer,
-    VoiceRoutes.routeLayer,
     ServerHttp.layerStaticAndDevRoute,
     Ws.layer,
   ),

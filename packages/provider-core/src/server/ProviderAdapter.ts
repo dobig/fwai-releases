@@ -402,6 +402,8 @@ export interface ProviderAdapterV2OpenSessionInput {
   readonly resumeFromSession?: OrchestrationV2ProviderSession;
   readonly initialNativeThreadId?: string;
   readonly initialProviderItemIdentityVersion?: 2;
+  /** The thread's own fwai Gateway quota project, when it overrides the environment default. */
+  readonly fwaiGatewayProjectId?: string;
 }
 
 export interface ProviderAdapterV2EnsureThreadInput {

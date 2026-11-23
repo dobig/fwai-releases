@@ -21,6 +21,7 @@ import { ThreadDetailsCard } from "./ThreadDetailsCard";
 import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
+import { type ThreadFwaiGateway, ThreadQuotaPicker } from "./ThreadQuotaPicker";
 import { ThreadRelationshipsPanel } from "./ThreadRelationshipsControl";
 import { ThreadLinkGroupsSection } from "./LinkGroupsControls";
 
@@ -34,6 +35,7 @@ export interface ThreadDetailsPanelProps extends Pick<
   environmentId: EnvironmentId;
   threadId: ThreadId;
   projectId: ProjectId;
+  fwaiGateway?: ThreadFwaiGateway | null;
   worktreePath: string | null;
   isServerThread: boolean;
   draftId?: DraftId;
@@ -198,6 +200,14 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
             <ThreadRelationshipsPanel
               environmentId={props.environmentId}
               threadId={props.threadId}
+            />
+          ) : null}
+
+          {density === "full" && !props.draftId && props.fwaiGateway ? (
+            <ThreadQuotaPicker
+              environmentId={props.environmentId}
+              threadId={props.threadId}
+              thread={props.fwaiGateway}
             />
           ) : null}
         </>

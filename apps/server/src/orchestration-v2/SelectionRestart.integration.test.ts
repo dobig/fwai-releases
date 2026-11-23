@@ -774,3 +774,103 @@ it.live.each(["active", "idle", "selection-command", "pooled", "separate-home"] 
       }),
     ),
 );
+
+it.live("restarts the session with the thread's new fwai Gateway quota project", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const name = "fwai-gateway-project-restart";
+      const cwd = yield* checkpointWorkspace(name);
+      const threadId = ThreadId.make(`thread:${name}`);
+      const state = yield* Ref.make<RestartAdapterState>({
+        activeTurn: null,
+        opened: [],
+        started: [],
+        closedSessionCount: 0,
+        failedReplacementOpen: true,
+      });
+      const openedProjects: Array<string | undefined> = [];
+      const base = makeRestartAdapter(state, exclusiveCapabilities);
+      const layerRegistry = ProviderAdapterRegistry.layerSingle({
+        ...base,
+        openSession: (input) => {
+          openedProjects.push(input.fwaiGatewayProjectId);
+          return base.openSession(input);
+        },
+      });
+
+      const result = yield* Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+        const eventSink = yield* EventSink.EventSinkV2;
+        const dispatch = (step: string) =>
+          Effect.gen(function* () {
+            const terminal = yield* orchestrator.streamDomainEvents.pipe(
+              Stream.filter(
+                (event) => event.type === "run.updated" && event.payload.status === "completed",
+              ),
+              Stream.take(1),
+              Stream.runDrain,
+              Effect.forkScoped,
+            );
+            yield* orchestrator.dispatch({
+              type: "message.dispatch",
+              createdBy: "user",
+              creationSource: "web",
+              commandId: CommandId.make(`${name}:${step}`),
+              threadId,
+              messageId: MessageId.make(`${name}:${step}`),
+              text: step,
+              attachments: [],
+              modelSelection: seedSelection,
+              dispatchMode: { type: "start_immediately" },
+            });
+            yield* worker.drain();
+            yield* Fiber.join(terminal);
+            yield* worker.drain();
+            return yield* orchestrator.getThreadProjection(threadId);
+          });
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`${name}:create`),
+          threadId,
+          projectId: ProjectId.make(`project:${name}`),
+          title: name,
+          modelSelection: seedSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: cwd,
+        });
+        const first = yield* dispatch("first");
+        const liveSession = first.providerSessions.find(
+          (session) => session.status !== "stopped" && session.status !== "error",
+        );
+        const updateCommandId = CommandId.make(`${name}:project`);
+        yield* orchestrator.dispatch({
+          type: "thread.metadata.update",
+          commandId: updateCommandId,
+          threadId,
+          fwaiGatewayProjectId: "proj-a",
+        });
+        yield* worker.drain();
+        const detached = [
+          ...(yield* eventSink
+            .readByCommandId({ commandId: updateCommandId })
+            .pipe(Stream.runCollect)),
+        ].flatMap((stored) =>
+          stored.event.type === "provider-session.detached"
+            ? [stored.event.payload.providerSessionId]
+            : [],
+        );
+        const second = yield* dispatch("second");
+        return { liveSessionId: liveSession?.id, detached, projection: second };
+      }).pipe(Effect.provide(ProviderReplayHarness.layerWithRegistry({ name }, layerRegistry)));
+
+      assert.equal(result.projection.thread.fwaiGatewayProjectId, "proj-a");
+      assert.deepEqual(result.detached, [result.liveSessionId]);
+      assert.deepEqual(openedProjects, [undefined, "proj-a"]);
+    }),
+  ),
+);

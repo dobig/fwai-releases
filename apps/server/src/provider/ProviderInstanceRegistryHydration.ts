@@ -21,6 +21,7 @@ import * as ProviderHostLive from "./ProviderHostLive.ts";
 import type * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import type * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import type * as ServerConfig from "../config.ts";
+import { FWAI_GATEWAY_PROJECT_ENV, FWAI_GATEWAY_ROUTE_ENV } from "../fwaiGateway/routeEnv.ts";
 
 type ProviderInstanceRegistryHydrationEnv =
   | Exclude<
@@ -60,6 +61,35 @@ export const deriveProviderInstanceConfigMap = (
         ...(providerInstanceConfigEnabledFlag(existing.config) === false
           ? { config: { ...(existing.config as Record<string, unknown>), enabled: true } }
           : {}),
+      };
+    }
+  }
+
+  if (settings.fwaiGatewayEnabled) {
+    const routed = new Set([
+      ...(settings.fwaiGatewayClaude ? ["claudeAgent"] : []),
+      ...(settings.fwaiGatewayCodex ? ["codex"] : []),
+    ]);
+    for (const [instanceId, instance] of Object.entries(merged)) {
+      if (!routed.has(instance.driver) || isManagedCodex(instance)) continue;
+      merged[instanceId] = {
+        ...instance,
+        environment: [
+          ...(instance.environment ?? []).filter(
+            (entry) =>
+              entry.name !== FWAI_GATEWAY_ROUTE_ENV && entry.name !== FWAI_GATEWAY_PROJECT_ENV,
+          ),
+          { name: FWAI_GATEWAY_ROUTE_ENV, value: "1", sensitive: false },
+          ...(settings.fwaiGatewayProjectId === null
+            ? []
+            : [
+                {
+                  name: FWAI_GATEWAY_PROJECT_ENV,
+                  value: settings.fwaiGatewayProjectId,
+                  sensitive: false,
+                },
+              ]),
+        ],
       };
     }
   }
@@ -123,3 +153,10 @@ export const layer: Layer.Layer<
   never,
   ProviderInstanceRegistryHydrationEnv
 >;
+
+// Managed Codex shares the codex driver but runs its own ChatGPT token provider, not the gateway.
+const isManagedCodex = (instance: ProviderInstanceConfig) =>
+  instance.driver === "codex" &&
+  typeof instance.config === "object" &&
+  instance.config !== null &&
+  (instance.config as { readonly setupMode?: unknown }).setupMode === "managed";

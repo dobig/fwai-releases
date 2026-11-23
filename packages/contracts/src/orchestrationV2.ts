@@ -415,6 +415,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   pullRequests: Schema.optional(Schema.Array(ThreadPullRequestLink)),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  /** Organization project whose quota this thread's fwai Gateway requests use; null follows the default. */
+  fwaiGatewayProjectId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   historyOrigin: Schema.optional(OrchestrationV2ThreadHistoryOrigin),
   lineage: OrchestrationV2AppThreadLineage,
@@ -957,6 +959,8 @@ export type OrchestrationV2PendingBackgroundTask = typeof OrchestrationV2Pending
 
 export const OrchestrationV2ProviderThreadNativeMetadata = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
+  /** Codex's `model_provider` at thread start; a thread keeps it for life (fwai Gateway routing). */
+  modelProviderId: Schema.optional(TrimmedNonEmptyString),
   title: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   updatedAt: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   itemIdentityVersion: Schema.optional(Schema.Literal(2)),
@@ -2926,6 +2930,8 @@ export const OrchestrationV2Command = Schema.Union([
     limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecoveryUpdate)),
     /** Link (object) or unlink (null) a pull request; absent leaves it unchanged. */
     linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+    /** Set (id) or clear (null, follow the default) the fwai Gateway quota project. */
+    fwaiGatewayProjectId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.pull-request.link"),

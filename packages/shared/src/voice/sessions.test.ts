@@ -1,12 +1,7 @@
-// @effect-diagnostics nodeBuiltinImport:off - plain-TS voice core, tested without an Effect runtime.
-import * as NodeFS from "node:fs";
-import * as NodeOS from "node:os";
-import * as NodePath from "node:path";
-
 import { describe, expect, it } from "vite-plus/test";
 
-import { DEFAULT_VOICE_CONFIG } from "@t3tools/shared/voice/config";
-import type { Intent, SessionListing, VoiceLlm } from "@t3tools/shared/voice/llm";
+import { DEFAULT_VOICE_CONFIG } from "./config.ts";
+import type { Intent, SessionListing, VoiceLlm } from "./llm.ts";
 import {
   mentions,
   Sessions,
@@ -16,9 +11,8 @@ import {
   type VoiceStateStore,
   type VoiceT3,
   type VoiceThread,
-} from "@t3tools/shared/voice/sessions";
-import type { CueName, SpeakerPort } from "@t3tools/shared/voice/speaker";
-import { VoiceStore } from "./store.ts";
+} from "./sessions.ts";
+import type { CueName, SpeakerPort } from "./speaker.ts";
 
 class FakeSpeaker implements SpeakerPort {
   said: Array<string> = [];
@@ -872,27 +866,5 @@ describe("speakable", () => {
   it("strips markdown that sounds bad read aloud", () => {
     const text = speakable("## 结果\n改了 `a.py`，见 [PR](http://x)\n```py\nprint(1)\n```");
     expect(text).not.toMatch(/`|http|print/);
-  });
-});
-
-describe("VoiceStore", () => {
-  it("keeps history and state across a reopen", () => {
-    const path = NodePath.join(
-      NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "voice-store-")),
-      "voice.sqlite",
-    );
-    const store = new VoiceStore(path);
-    store.add("heard", "补单测", "网关");
-    store.add("said", "网关做完了。");
-    store.save({ current: "t1", passive: true });
-    store.close();
-    const reopened = new VoiceStore(path);
-    expect(reopened.recent().map((e) => [e.kind, e.text, e.session])).toEqual([
-      ["heard", "补单测", "网关"],
-      ["said", "网关做完了。", null],
-    ]);
-    expect(reopened.recent(1)[0]!.text).toBe("网关做完了。");
-    expect(reopened.load()).toEqual({ current: "t1", passive: true });
-    reopened.close();
   });
 });

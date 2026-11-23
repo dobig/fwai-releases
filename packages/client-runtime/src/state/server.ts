@@ -1201,6 +1201,18 @@ export function createServerEnvironmentAtoms<R, E>(
         runStream(WS_METHODS.chatGptHandoffSubscribe, input),
       idleTtlMs: 0,
     }),
+    fwaiGatewayState: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:fwai-gateway:state",
+      tag: WS_METHODS.fwaiGatewaySubscribe,
+    }),
+    fwaiGatewayConnect: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:fwai-gateway:connect",
+      tag: WS_METHODS.fwaiGatewayConnect,
+    }),
+    fwaiGatewayDisconnect: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:fwai-gateway:disconnect",
+      tag: WS_METHODS.fwaiGatewayDisconnect,
+    }),
     codexAuthCallbackState: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:codex:auth-callback",
       tag: WS_METHODS.codexAuthCallbackSubscribe,

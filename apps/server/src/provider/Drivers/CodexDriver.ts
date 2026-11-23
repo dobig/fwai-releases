@@ -1,6 +1,7 @@
 import { CodexSettings, ProviderDriverKind } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -57,6 +58,10 @@ import * as CodexManagedTokenBroker from "../CodexManagedTokenBroker.ts";
 import * as ServerSecretStore from "../../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import {
+  codexGatewayLaunchArgs,
+  resolveFwaiGatewayRoute,
+} from "../../fwaiGateway/FwaiGatewayRoute.ts";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("codex");
@@ -175,6 +180,7 @@ export const CodexDriver: ProviderDriver<
       ),
     );
 
+    const gatewayRoute = yield* resolveFwaiGatewayRoute();
     const orchestrationAdapter = yield* createCodexAdapterV2(
       {
         instanceId,
@@ -182,7 +188,13 @@ export const CodexDriver: ProviderDriver<
         accentColor,
         environment,
         enabled,
-        config,
+        config: Option.match(gatewayRoute, {
+          onNone: () => config,
+          onSome: (route) => ({
+            ...config,
+            launchArgs: [codexGatewayLaunchArgs(route), config.launchArgs].join(" ").trim(),
+          }),
+        }),
       },
       { onUsageLimits: (update) => snapshot.applyUsageLimits(update) },
     ).pipe(
