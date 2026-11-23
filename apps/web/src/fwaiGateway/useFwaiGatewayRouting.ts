@@ -11,8 +11,6 @@ import { useAtomCommand } from "../state/use-atom-command";
 
 const COMMAND_OPTIONS = { reportFailure: false, reportDefect: true };
 
-export const CODEX_GATEWAY_PROVIDER_ID = "fwai_gateway";
-
 /**
  * The fwai Gateway switch for one environment. Turning it on signs the environment in with the
  * account this app is already signed in to (it approves the environment's device code itself);

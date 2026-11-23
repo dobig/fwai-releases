@@ -22,13 +22,4 @@ export function useFwaiOrganizationQuota(active: boolean): FwaiOrganizationQuota
   return active ? quota : null;
 }
 
-export function formatProjectQuota(project: {
-  readonly fiveHourPercent: number | null;
-  readonly weeklyPercent: number | null;
-}): string | null {
-  const parts = [
-    project.fiveHourPercent === null ? null : `5h ${Math.round(project.fiveHourPercent)}%`,
-    project.weeklyPercent === null ? null : `week ${Math.round(project.weeklyPercent)}%`,
-  ].filter((part): part is string => part !== null);
-  return parts.length === 0 ? null : parts.join(" · ");
-}
+export { formatProjectQuota } from "@t3tools/client-runtime/fwai-gateway";
