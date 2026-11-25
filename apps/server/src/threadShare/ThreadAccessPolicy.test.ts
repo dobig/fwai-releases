@@ -211,6 +211,52 @@ describe("ThreadAccessPolicy.authorizeCall", () => {
   );
 });
 
+describe("ThreadAccessPolicy.authorizeCall for the vault", () => {
+  const allowed = (method: string, payload: unknown, principal: AuthAccountPrincipal) =>
+    Effect.flatMap(ThreadAccessPolicy.ThreadAccessPolicy, (policy) =>
+      Effect.exit(policy.authorizeCall(principal, method, payload)),
+    ).pipe(Effect.map(Exit.isSuccess));
+  // A link peer's task reaches the environment as an account with no shares of its own.
+  const linkPeer: AuthAccountPrincipal = {
+    accountId: "user-peer",
+    organization: null,
+    shareIds: [],
+  };
+  const calls = [
+    [WS_METHODS.vaultList, {}],
+    [WS_METHODS.vaultCreate, { name: "GitHub", kind: "password", domains: [], scope: "global" }],
+    [WS_METHODS.vaultUpdate, { id: "entry-1" }],
+    [WS_METHODS.vaultDelete, { id: "entry-1" }],
+    [WS_METHODS.vaultMatchesForRequest, { threadId: sharedThread, turnItemId: "item-1" }],
+    [WS_METHODS.vaultUsePreviousVersion, { id: "entry-1" }],
+    [WS_METHODS.vaultSyncStatus, {}],
+    [WS_METHODS.vaultSyncJoin, {}],
+    [WS_METHODS.vaultSyncLeave, {}],
+    [WS_METHODS.vaultSyncTurnOff, {}],
+    [WS_METHODS.vaultSyncRotate, {}],
+    [WS_METHODS.vaultSyncRevoke, { environmentId: "env-other" }],
+    // Secret cards and vault approvals, even in a collaborator's own run, are the owner's.
+    [
+      WS_METHODS.secretsAnswerRequest,
+      { threadId: sharedThread, turnItemId: "item-1", answer: { type: "decline" } },
+    ],
+    [
+      WS_METHODS.secretsAnswerVaultApproval,
+      { threadId: sharedThread, turnItemId: "item-1", decision: "allow" },
+    ],
+  ] as const;
+
+  it.effect("refuses collaborators and link peers, even in a thread shared with them", () =>
+    Effect.gen(function* () {
+      for (const [method, payload] of calls) {
+        assert.isFalse(yield* allowed(method, payload, bob), method);
+        assert.isFalse(yield* allowed(method, payload, linkPeer), method);
+        assert.isTrue(yield* allowed(method, payload, owner), method);
+      }
+    }).pipe(Effect.provide(layerPolicy)),
+  );
+});
+
 describe("ThreadAccessPolicy.authorizeCall for a collaborator's own work", () => {
   const allowed = (method: string, payload: unknown, principal: AuthAccountPrincipal = bob) =>
     Effect.flatMap(ThreadAccessPolicy.ThreadAccessPolicy, (policy) =>

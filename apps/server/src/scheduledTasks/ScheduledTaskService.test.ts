@@ -10,6 +10,7 @@ import {
   ScheduledTaskId,
   ThreadId,
 } from "@t3tools/contracts";
+import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -400,5 +401,59 @@ it.effect("thread cleanup notifies subscribers and a finishing run cannot recrea
       yield* Fiber.join(run);
       assert.lengthOf((yield* service.list()).tasks, 0);
     }).pipe(Effect.provide(layer));
+  }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
+);
+
+it.effect("runs a task saved by a collaborator's run as that account every time", () =>
+  Effect.gen(function* () {
+    const launched = yield* Ref.make<ReadonlyArray<string | undefined>>([]);
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const context = yield* Layer.build(
+          Layer.provideMerge(
+            ScheduledTaskService.layer,
+            Layer.mergeAll(
+              Layer.mock(ThreadLaunchService.ThreadLaunchService)({
+                launch: (input) =>
+                  Ref.update(launched, (all) => [...all, input.actingAccountId]).pipe(
+                    Effect.as({ threadId: ThreadId.make("thread:launched") } as never),
+                  ),
+              }),
+              Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+                namedProjectsRoot: "/projects",
+                isScratchProject: () => Effect.succeed(false),
+              }),
+              Layer.mock(ThreadManagementService.ThreadManagementService)({}),
+              Layer.mock(SecretRequests.SecretRequests)({}),
+              NodeCrypto.layer,
+              Scheduler.layer,
+            ),
+          ),
+        );
+        const tasks = Context.get(context, ScheduledTaskService.ScheduledTaskService);
+        const input = {
+          title: "Nightly",
+          prompt: "Run the nightly check",
+          enabled: false,
+          schedule: { type: "interval", everyMs: 60_000 },
+          projectId: ProjectId.make("project:test"),
+          workspaceStrategy: { type: "root" },
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+        } as const;
+        const { task } = yield* tasks.upsert(input, { actingAccountId: "gateway-user-1" });
+        assert.equal(task.actingAccountId, "gateway-user-1");
+        // The owner editing it later does not turn it into the owner's task.
+        const edited = yield* tasks.upsert({ ...input, id: task.id, prompt: "Run it again" });
+        assert.equal(edited.task.actingAccountId, "gateway-user-1");
+        yield* tasks.runNow({ id: task.id });
+        yield* tasks.runNow({ id: task.id });
+        const owned = yield* tasks.upsert({ ...input, title: "Owner's" });
+        assert.isUndefined(owned.task.actingAccountId);
+        yield* tasks.runNow({ id: owned.task.id });
+      }),
+    );
+    assert.deepEqual(yield* Ref.get(launched), ["gateway-user-1", "gateway-user-1", undefined]);
   }).pipe(Effect.provide(SqlitePersistence.layerMemory)),
 );

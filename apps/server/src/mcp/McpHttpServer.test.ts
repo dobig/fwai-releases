@@ -6,9 +6,17 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EnvironmentId,
   OrchestratorMcpFailure,
+  PREVIEW_AUTOMATION_SERVER_OPERATIONS,
   PreviewTabId,
   ProviderInstanceId,
+  RunId,
+  SecretRef,
   ThreadId,
+  VaultEntryId,
+  VAULT_TOOL_FAILURE_MESSAGES,
+  type PreviewAutomationRequest,
+  type VaultEntrySummary,
+  type VaultEntryUsage,
 } from "@t3tools/contracts";
 import { agentMcpToolName } from "@t3tools/shared/fwaiMcpNames";
 import * as Deferred from "effect/Deferred";
@@ -30,6 +38,10 @@ import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 import * as PersonalAgentService from "../personalAgent/PersonalAgentService.ts";
+import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as SecretRequests from "../secrets/SecretRequests.ts";
+import * as VaultService from "../vault/VaultService.ts";
+import { PreviewToolkit } from "./toolkits/preview/tools.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import { ProjectToolkit } from "./toolkits/project/tools.ts";
 
@@ -64,6 +76,8 @@ const client = McpSchema.McpServerClient.of({
 const layerTest = McpHttpServer.layerPreviewToolkit.pipe(
   Layer.provideMerge(McpServer.McpServer.layer),
   Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
+  Layer.provideMerge(Layer.mock(SecretRequests.SecretRequests)({})),
+  Layer.provideMerge(Layer.mock(VaultService.VaultService)({})),
   Layer.provideMerge(PreviewAutomationBroker.layer),
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-http-server-test-" })),
   Layer.provideMerge(NodeServices.layer),
@@ -1038,4 +1052,122 @@ it.effect("leaves every tool to the agent window, which acts with its owner's au
     // The recording handler ran: nothing refused the call before it.
     expect(calls).toHaveLength(1);
   }).pipe(Effect.provide(layerRecordingTools(calls, "some-request-thread")));
+});
+
+const VAULT_VALUE = "hunter2-vault-value";
+
+const layerVaultFill = (options: {
+  readonly entryId: VaultEntryId | undefined;
+  readonly domains: ReadonlyArray<string>;
+  readonly uses: Array<VaultEntryUsage>;
+}) =>
+  McpHttpServer.layerPreviewToolkit.pipe(
+    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(
+      Layer.mock(ThreadManagementService.ThreadManagementService)({
+        getThreadShell: (id) => Effect.succeed(McpToolAccessTestkit.liveThreadShell(id)),
+        getThreadRecords: (id) =>
+          Effect.succeed({
+            thread: McpToolAccessTestkit.liveThreadShell(id),
+            runs: [{ id: RunId.make("run:mcp-test"), status: "running", actingAccountId: "bob" }],
+          } as never),
+      }),
+    ),
+    Layer.provideMerge(
+      Layer.mock(SecretRequests.SecretRequests)({
+        consumeForFill: () => Effect.succeed(options.entryId),
+      }),
+    ),
+    Layer.provideMerge(
+      Layer.mock(VaultService.VaultService)({
+        get: (id) => Effect.succeed({ id, domains: options.domains } as VaultEntrySummary),
+        readValue: () => Effect.succeed(VAULT_VALUE),
+        recordUse: (_id, usage) => Effect.sync(() => options.uses.push(usage)),
+      }),
+    ),
+    Layer.provideMerge(PreviewAutomationBroker.layer),
+    Layer.provideMerge(
+      ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-http-server-test-" }),
+    ),
+    Layer.provideMerge(NodeServices.layer),
+  );
+
+const serveVaultFills = Effect.gen(function* () {
+  const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+  const connected = yield* Deferred.make<void>();
+  const requests: Array<PreviewAutomationRequest> = [];
+  const events = yield* broker.connect({
+    clientId: "vault-fill-host",
+    environmentId,
+    supportedOperations: [...PREVIEW_AUTOMATION_SERVER_OPERATIONS],
+  });
+  yield* Stream.runForEach(events, (event) => {
+    if (event.type === "connected") return Deferred.succeed(connected, undefined);
+    requests.push(event.request);
+    return broker.respond({
+      clientId: "vault-fill-host",
+      connectionId: event.connectionId,
+      requestId: event.request.requestId,
+      ok: true,
+      result: { url: "https://login.example.com/" },
+    });
+  }).pipe(Effect.forkScoped);
+  yield* Deferred.await(connected);
+  return requests;
+});
+
+const secretRef = SecretRef.make("secret-ref:00000000000000000000000000000003");
+
+it("offers preview_type a secretRef in place of text, never a value", () => {
+  const parameters = Tool.getJsonSchema(PreviewToolkit.tools.preview_type) as {
+    readonly properties: Record<string, unknown>;
+  };
+  expect(Object.keys(parameters.properties)).toEqual(expect.arrayContaining(["text", "secretRef"]));
+  const decode = Schema.decodeUnknownExit(PreviewToolkit.tools.preview_type.parametersSchema);
+  expect(decode({ secretRef })._tag).toBe("Success");
+  expect(decode({ secretRef, text: "typed" })._tag).toBe("Failure");
+  expect(decode({})._tag).toBe("Failure");
+});
+
+it.effect("types a vault secretRef through the host by entry id and records the fill", () => {
+  const uses: Array<VaultEntryUsage> = [];
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const requests = yield* serveVaultFills;
+      const result = yield* callTool("preview_type", { secretRef, selector: "#password" });
+
+      expect(result.isError).toBe(false);
+      const fill = requests.find((request) => request.operation === "typeVaultSecret");
+      expect(fill?.input).toEqual({ entryId: "entry-1", selector: "#password" });
+      expect(JSON.stringify(requests)).not.toContain(VAULT_VALUE);
+      expect(JSON.stringify(result)).not.toContain(VAULT_VALUE);
+      expect(uses).toEqual([
+        expect.objectContaining({ threadId, delivery: "form_fill", accountId: "bob" }),
+      ]);
+    }),
+  ).pipe(
+    Effect.provide(
+      layerVaultFill({ entryId: VaultEntryId.make("entry-1"), domains: ["example.com"], uses }),
+    ),
+  );
+});
+
+it.effect.each([
+  { name: "a typed answer not saved to the vault", entryId: undefined, domains: ["example.com"] },
+  { name: "an entry with no domains", entryId: VaultEntryId.make("entry-1"), domains: [] },
+])("refuses $name before any page is touched", ({ entryId, domains }) => {
+  const uses: Array<VaultEntryUsage> = [];
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const requests = yield* serveVaultFills;
+      const result = yield* callTool("preview_type", { secretRef, selector: "#password" });
+
+      expect(result.isError).toBe(true);
+      expect(result.content).toEqual([
+        { type: "text", text: VAULT_TOOL_FAILURE_MESSAGES.domain_mismatch },
+      ]);
+      expect(requests).toEqual([]);
+      expect(uses).toEqual([]);
+    }),
+  ).pipe(Effect.provide(layerVaultFill({ entryId, domains, uses })));
 });

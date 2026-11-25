@@ -10,6 +10,7 @@ import {
   OrchestratorMcpDeleteScheduledTaskResult,
   OrchestratorMcpRequestSecretInput,
   OrchestratorMcpRequestSecretResult,
+  OrchestratorMcpSecretListResult,
   OrchestratorMcpFailure,
   OrchestratorMcpListScheduledTasksInput,
   OrchestratorMcpListScheduledTasksResult,
@@ -189,7 +190,7 @@ const DeleteScheduledTaskTool = Tool.make("delete_scheduled_task", {
 
 const RequestSecretTool = Tool.make("request_secret", {
   description:
-    'Ask the user to enter a secret in a private card and wait. You never see the value. Returns a one-use `secretRef` for a tool that accepts it, or with `delivery: "file"` a private file path to read inside a shell command. Asked how to provide a secret: call this now, do not explain instead.',
+    'Get a secret without seeing it. Call `secret_list` first and pass `name` when a vault entry fits; otherwise the user enters it in a private card and you wait. Returns a one-use `secretRef` for a tool that accepts it, or with `delivery: "file"` a private file path to read inside a shell command. Asked how to provide a secret: call this now, do not explain instead.',
   parameters: OrchestratorMcpRequestSecretInput,
   success: OrchestratorMcpRequestSecretResult,
   failure: OrchestratorMcpFailure,
@@ -198,6 +199,19 @@ const RequestSecretTool = Tool.make("request_secret", {
 })
   .annotate(Tool.Title, "Request a secret from the user")
   .annotate(Tool.Destructive, false);
+
+const SecretListTool = Tool.make("secret_list", {
+  description:
+    "List the vault entries this project may use: name, kind, username and domains, never values. Pass an entry's name to `request_secret`.",
+  success: OrchestratorMcpSecretListResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies,
+})
+  .annotate(Tool.Title, "List vault secrets")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true);
 
 const CreateThreadsTool = Tool.make("create_threads", {
   description:
@@ -305,6 +319,7 @@ export const OrchestratorToolkit = Toolkit.make(
   UpdateScheduledTaskTool,
   DeleteScheduledTaskTool,
   RequestSecretTool,
+  SecretListTool,
   CreateThreadsTool,
   ThreadListTool,
   ThreadReadTool,

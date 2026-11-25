@@ -22,3 +22,7 @@ export function withConnectAutoEnableOptOut(
   const others = state.optOutAccounts.filter((entry) => entry !== account);
   return { optOutAccounts: optedOut ? [...others, account] : others };
 }
+
+/** The desktop sign-in's "join secret sharing" choice, applied once the environment is linked. */
+export const VAULT_JOIN_ON_LINK_STORAGE_KEY = "fwai:vault-join-on-link:v1";
+export const VaultJoinOnLinkSchema = Schema.Boolean;

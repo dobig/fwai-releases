@@ -3,6 +3,7 @@ import {
   CommandId,
   MessageId,
   NodeId,
+  type OrchestrationV2Command,
   ProviderSessionId,
   RuntimeRequestId,
   ProjectId,
@@ -22,7 +23,7 @@ import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
-import { withMessageAuthor } from "./ThreadManagementService.ts";
+import { isOwnerRun, withMessageAuthor } from "./ThreadManagementService.ts";
 
 const instanceId = ProviderInstanceId.make("codex");
 const adapter = {
@@ -58,6 +59,9 @@ const message = (id: string) =>
     creationSource: "web",
   }) as const;
 
+const collaborator = { accountId: "gateway-user-1", organization: null, shareIds: [] };
+const ownerOverRelay = { accountId: "gateway-owner", organization: null };
+
 it("replaces any author a client claims with the session's account", () => {
   const claimed = {
     ...message("claimed"),
@@ -65,7 +69,7 @@ it("replaces any author a client claims with the session's account", () => {
     dispatchMode: { type: "defer_start" as const },
   };
   assert.equal(
-    (withMessageAuthor(claimed, "gateway-user-1") as { authorAccountId?: string }).authorAccountId,
+    (withMessageAuthor(claimed, collaborator) as { authorAccountId?: string }).authorAccountId,
     "gateway-user-1",
   );
   assert.notProperty(withMessageAuthor(claimed, undefined), "authorAccountId");
@@ -73,12 +77,25 @@ it("replaces any author a client claims with the session's account", () => {
   assert.notProperty(withMessageAuthor(ceilingClaimed, undefined), "runtimeModeCeiling");
   assert.equal(
     (
-      withMessageAuthor(ceilingClaimed, "gateway-user-1", "approval-required") as {
+      withMessageAuthor(ceilingClaimed, collaborator, "approval-required") as {
         runtimeModeCeiling?: string;
       }
     ).runtimeModeCeiling,
     "approval-required",
   );
+});
+
+it("lets only a collaborator's session name the account a run acts for", () => {
+  const claimed = {
+    ...message("acting-claimed"),
+    actingAccountId: "someone-else",
+    dispatchMode: { type: "defer_start" as const },
+  };
+  const acting = (principal: Parameters<typeof withMessageAuthor>[1]) =>
+    (withMessageAuthor(claimed, principal) as { actingAccountId?: string }).actingAccountId;
+  assert.equal(acting(collaborator), "gateway-user-1");
+  assert.isUndefined(acting(ownerOverRelay));
+  assert.isUndefined(acting(undefined));
 });
 
 it.effect("keeps the author on the message and its timeline item", () =>
@@ -186,5 +203,129 @@ it.effect("names the collaborator whose message started the run on its pending a
         );
     assert.equal(yield* approvalFor(runOf("collaborator")), "gateway-user-1");
     assert.isUndefined(yield* approvalFor(runOf("owner")));
+  }).pipe(Effect.provide(layerTest)),
+);
+
+const createThread = (
+  id: ThreadId,
+  runtimeMode: "full-access" | "approval-required" = "full-access",
+) =>
+  Effect.flatMap(Orchestrator.OrchestratorV2, (orchestrator) =>
+    orchestrator.dispatch({
+      type: "thread.create",
+      commandId: CommandId.make(`create:${id}`),
+      threadId: id,
+      projectId: ProjectId.make("project:message-author"),
+      title: "Acting accounts",
+      modelSelection: { instanceId, model: "gpt-5.1-codex" },
+      runtimeMode,
+      interactionMode: "default",
+      branch: null,
+      worktreePath: null,
+      createdBy: "user",
+      creationSource: "web",
+    }),
+  );
+
+const send = (
+  id: string,
+  fields: Partial<Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>> = {},
+) =>
+  Effect.flatMap(Orchestrator.OrchestratorV2, (orchestrator) =>
+    orchestrator.dispatch({
+      ...message(id),
+      dispatchMode: { type: "start_immediately" },
+      ...fields,
+    }),
+  );
+
+const runFor = (thread: ThreadId, id: string) =>
+  Effect.map(
+    Effect.flatMap(ProjectionStore.ProjectionStoreV2, (store) => store.getThreadProjection(thread)),
+    (projection) => projection.runs.find((run) => run.userMessageId === MessageId.make(id)),
+  );
+
+it.effect("records the collaborator a run acts for, and none for the owner", () =>
+  Effect.gen(function* () {
+    yield* createThread(threadId);
+    yield* send("collaborator", {
+      authorAccountId: "gateway-user-1",
+      actingAccountId: "gateway-user-1",
+      dispatchMode: { type: "defer_start" },
+    });
+    yield* send("owner", {
+      authorAccountId: "gateway-owner",
+      dispatchMode: { type: "defer_start" },
+    });
+    const collaboratorRun = yield* runFor(threadId, "collaborator");
+    const ownerRun = yield* runFor(threadId, "owner");
+    assert.equal(collaboratorRun?.actingAccountId, "gateway-user-1");
+    assert.isFalse(isOwnerRun(collaboratorRun!));
+    assert.isUndefined(ownerRun?.actingAccountId);
+    assert.isTrue(isOwnerRun(ownerRun!));
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("queues a collaborator's steer into a run acting for someone else", () =>
+  Effect.gen(function* () {
+    yield* createThread(threadId);
+    yield* send("owner-active");
+    const active = (yield* runFor(threadId, "owner-active"))!;
+    yield* send("collaborator-steer", {
+      authorAccountId: "gateway-user-1",
+      actingAccountId: "gateway-user-1",
+      dispatchMode: { type: "steer_active", targetRunId: active.id },
+    });
+    const queued = yield* runFor(threadId, "collaborator-steer");
+    assert.equal(queued?.status, "queued");
+    assert.equal(queued?.actingAccountId, "gateway-user-1");
+    assert.isUndefined((yield* runFor(threadId, "owner-active"))?.actingAccountId);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("passes the acting account to what the run starts", () =>
+  Effect.gen(function* () {
+    const orchestrator = yield* Orchestrator.OrchestratorV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const childThreadId = ThreadId.make("thread:acting-child");
+    yield* createThread(threadId);
+    yield* createThread(childThreadId);
+    yield* send("collaborator-parent", {
+      authorAccountId: "gateway-user-1",
+      actingAccountId: "gateway-user-1",
+    });
+    const parentRun = (yield* runFor(threadId, "collaborator-parent"))!;
+
+    // An agent's message to another thread, as t3_thread_launch, create_threads and thread_send send.
+    yield* send("agent-message", {
+      threadId: childThreadId,
+      senderThreadId: threadId,
+      createdBy: "agent",
+      creationSource: "mcp",
+    });
+    assert.equal(
+      (yield* runFor(childThreadId, "agent-message"))?.actingAccountId,
+      "gateway-user-1",
+    );
+
+    yield* orchestrator.dispatch({
+      type: "delegated_task.request",
+      commandId: CommandId.make("acting-delegate"),
+      parentThreadId: threadId,
+      parentRunId: parentRun.id,
+      parentNodeId: parentRun.rootNodeId!,
+      task: "Check the build",
+      modelSelection: { instanceId, model: "gpt-5.1-codex" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      createdBy: "agent",
+      creationSource: "mcp",
+    });
+    const delegated = (yield* projections.getThreadProjection(threadId)).subagents[0]!;
+    const delegatedRuns = (yield* projections.getThreadProjection(delegated.childThreadId!)).runs;
+    assert.deepEqual(
+      delegatedRuns.map((run) => run.actingAccountId),
+      ["gateway-user-1"],
+    );
   }).pipe(Effect.provide(layerTest)),
 );

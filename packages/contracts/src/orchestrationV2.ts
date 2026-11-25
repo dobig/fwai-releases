@@ -85,6 +85,7 @@ import {
   ToolActivitySource,
 } from "./providerRuntime.ts";
 import { ThreadTokenUsageSnapshot } from "./providerRuntime.ts";
+import { VaultEntryId, VaultEntryName } from "./vault.ts";
 
 export const OrchestrationV2Actor = Schema.Literals(["user", "agent", "system"]);
 export type OrchestrationV2Actor = typeof OrchestrationV2Actor.Type;
@@ -669,6 +670,8 @@ export const OrchestrationV2Run = Schema.Struct({
   workspacePreparation: Schema.optional(OrchestrationV2ThreadLaunchWorkspaceStrategy),
   /** No broader than this, whatever the thread's mode: a collaborator's run on a shared thread. */
   runtimeModeCeiling: Schema.optional(RuntimeMode),
+  /** fwai: the account the run acts for; absent for the environment owner. Set by the server only. */
+  actingAccountId: Schema.optional(TrimmedNonEmptyString),
 });
 export type OrchestrationV2Run = typeof OrchestrationV2Run.Type;
 
@@ -1452,6 +1455,19 @@ export type OrchestrationV2SecretRequestStatus = typeof OrchestrationV2SecretReq
 /** `file`: the value goes to an owner-only file the agent's shell commands can read. */
 export const OrchestrationV2SecretRequestDelivery = Schema.Literal("file");
 
+/**
+ * fwai: the agent asked for a vault entry by name. Without `requestedByAccountId` the
+ * owner's run used it at once ("Used <name>"). With it, a run acting for that account asks the
+ * owner to allow this one use: `pending` waits, `saved` is allowed, `declined` denied. Cards the
+ * user answers never carry this.
+ */
+export const OrchestrationV2SecretRequestVault = Schema.Struct({
+  entryId: VaultEntryId,
+  entryName: VaultEntryName,
+  requestedByAccountId: Schema.optional(TrimmedNonEmptyString),
+});
+export type OrchestrationV2SecretRequestVault = typeof OrchestrationV2SecretRequestVault.Type;
+
 const OrchestrationV2SecretRequestFields = {
   type: Schema.Literal("secret_request"),
   label: TrimmedNonEmptyString,
@@ -1459,6 +1475,7 @@ const OrchestrationV2SecretRequestFields = {
   placeholder: Schema.optional(Schema.String),
   delivery: Schema.optional(OrchestrationV2SecretRequestDelivery),
   secretStatus: OrchestrationV2SecretRequestStatus,
+  vault: Schema.optional(OrchestrationV2SecretRequestVault),
 } as const;
 
 export const OrchestrationV2TurnItem = Schema.Union([
@@ -3029,6 +3046,8 @@ export const OrchestrationV2Command = Schema.Union([
     authorAccountId: Schema.optional(TrimmedNonEmptyString),
     /** Set by the server for a collaborator who must not run commands unasked (#20). */
     runtimeModeCeiling: Schema.optional(RuntimeMode),
+    /** Set by the server only: the account the new run acts for; absent for the owner. */
+    actingAccountId: Schema.optional(TrimmedNonEmptyString),
     idleCompaction: Schema.optional(OrchestrationV2IdleCompaction),
     commandId: CommandId,
     threadId: ThreadId,
@@ -3365,6 +3384,8 @@ const OrchestrationV2InternalCommand = Schema.Union([
     /** The requester's task id, which both environments share. Required with `remote`. */
     taskId: Schema.optional(NodeId),
     runtimeModeCeiling: Schema.optional(RuntimeMode),
+    /** The account the assignee's run acts for; absent for the owner. */
+    actingAccountId: Schema.optional(TrimmedNonEmptyString),
   }),
   /** Records who stopped a link task, before its run is interrupted, so the requester sees it. */
   Schema.Struct({
@@ -3390,6 +3411,7 @@ const OrchestrationV2InternalCommand = Schema.Union([
     placeholder: Schema.optional(Schema.String),
     delivery: Schema.optional(OrchestrationV2SecretRequestDelivery),
     secretStatus: OrchestrationV2SecretRequestStatus,
+    vault: Schema.optional(OrchestrationV2SecretRequestVault),
   }),
 ]);
 export type OrchestrationV2InternalCommand = typeof OrchestrationV2InternalCommand.Type;

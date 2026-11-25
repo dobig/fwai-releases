@@ -77,6 +77,7 @@ import Migration0071 from "./Migrations/071_LinkGroups.ts";
 import Migration0072 from "./Migrations/072_LinkRemote.ts";
 import Migration0073 from "./Migrations/073_LinkActivity.ts";
 import Migration0074 from "./Migrations/074_PersonalAgent.ts";
+import Migration0075 from "./Migrations/075_ScheduledTaskActingAccount.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -154,6 +155,7 @@ const migrationEntries = [
   [72, "LinkRemote", Migration0072],
   [73, "LinkActivity", Migration0073],
   [74, "PersonalAgent", Migration0074],
+  [75, "ScheduledTaskActingAccount", Migration0075],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

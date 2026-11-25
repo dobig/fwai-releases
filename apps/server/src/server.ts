@@ -148,6 +148,7 @@ import * as CloudHttp from "./cloud/http.ts";
 import * as GuestHttp from "./guest/http.ts";
 import * as LinkEnvelopeRoute from "./link/linkEnvelopeRoute.ts";
 import * as AgentEnvelopeRoute from "./personalAgent/agentEnvelopeRoute.ts";
+import * as VaultChangedRoute from "./vault/sync/vaultChangedRoute.ts";
 import * as CloudLink from "./cloud/CloudLink.ts";
 import * as ConnectReachability from "./cloud/ConnectReachability.ts";
 import { pendingServiceUpdateExists } from "./cloud/updateHandoff.ts";
@@ -725,6 +726,8 @@ const layerMakeRoutes = Layer.mergeAll(
     LinkEnvelopeRoute.layer,
     // fwai: personal agent envelopes from the relay (#22).
     AgentEnvelopeRoute.layer,
+    // fwai: `vault.changed` hints from the relay.
+    VaultChangedRoute.layer,
     DeviceHubProxy.layer,
     ServerBrowserStream.routeLayer,
     ServerHttp.layerStaticAndDevRoute,

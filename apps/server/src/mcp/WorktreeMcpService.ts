@@ -84,7 +84,7 @@ const make = Effect.gen(function* () {
         );
 
   const loadThread = (scope: McpThreadInvocationScope) =>
-    threadManagement.getThreadRecords(scope.thread.threadId, []).pipe(
+    threadManagement.getThreadRecords(scope.thread.threadId, ["runs"]).pipe(
       Effect.mapError((error) =>
         error._tag === "OrchestratorProjectionError"
           ? failure("thread_not_found", `Thread '${scope.thread.threadId}' was not found.`)
@@ -158,6 +158,7 @@ const make = Effect.gen(function* () {
       );
     }
 
+    const actingAccountId = ThreadManagementService.latestActiveRun(projection)?.actingAccountId;
     const project = yield* loadProject(scope, projection.thread.projectId);
     const projectCwd = project.workspaceRoot;
 
@@ -319,6 +320,7 @@ const make = Effect.gen(function* () {
                     mode: "queue",
                     createdBy: "agent",
                     creationSource: "mcp",
+                    ...(actingAccountId === undefined ? {} : { actingAccountId }),
                   })
                   .pipe(
                     Effect.map((sendResult): WorktreeMcpContinuationStatus => ({

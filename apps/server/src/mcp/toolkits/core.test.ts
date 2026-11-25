@@ -46,6 +46,7 @@ import * as PreviewBrowser from "../../preview/PreviewBrowser.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
 import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
 import * as SecretRequests from "../../secrets/SecretRequests.ts";
+import * as VaultService from "../../vault/VaultService.ts";
 import * as ScheduledTaskService from "../../scheduledTasks/ScheduledTaskService.ts";
 import * as ThreadShareService from "../../threadShare/ThreadShareService.ts";
 import * as ServerSettings from "../../serverSettings.ts";
@@ -61,6 +62,7 @@ import * as AttachmentHandlers from "./attachment/handlers.ts";
 const layerOrchestratorToolkit = McpHttpServer.layerOrchestratorToolkit.pipe(
   Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
+  Layer.provide(Layer.mock(VaultService.VaultService)({})),
 );
 
 const declaredFailure = (result: McpSchema.CallToolResult) => {

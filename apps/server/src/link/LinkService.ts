@@ -112,6 +112,8 @@ export interface LinkAssignEnvelope {
   readonly requesterNodeId: NodeId;
   /** The mode the requester runs in; a remote assignee never runs broader. */
   readonly requesterRuntimeMode: RuntimeMode;
+  /** The account the requester's run acts for; a local assignee's run inherits it. */
+  readonly requesterActingAccountId?: string;
   readonly assignee: LinkThreadRef;
   readonly task: string;
   readonly link: LinkTaskRecord;
@@ -860,6 +862,9 @@ const make = Effect.gen(function* () {
             caller.thread.runtimeMode,
             run.runtimeModeCeiling,
           ),
+          ...(run.actingAccountId === undefined
+            ? {}
+            : { requesterActingAccountId: run.actingAccountId }),
           assignee,
           task: input.task,
           link: decided.success,
@@ -901,6 +906,9 @@ const make = Effect.gen(function* () {
         task: envelope.task,
         link: envelope.link,
         sender: envelope.sender,
+        ...(envelope.requesterActingAccountId === undefined
+          ? {}
+          : { actingAccountId: envelope.requesterActingAccountId }),
       })
       .pipe(
         Effect.mapError(orchestrationFailure),
@@ -1290,6 +1298,8 @@ const make = Effect.gen(function* () {
           },
         },
         runtimeModeCeiling: ceiling,
+        // The same account's other environment is the owner here.
+        ...(delivery.relation === "shared" ? { actingAccountId: delivery.actingAccountId } : {}),
       })
       .pipe(Effect.mapError(orchestrationFailure));
     yield* store

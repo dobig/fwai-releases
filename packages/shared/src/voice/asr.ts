@@ -117,6 +117,8 @@ export type Transcribe = (
   config: VoiceConfig,
   chunks: AsyncIterable<Uint8Array>,
   hotwords?: ReadonlyArray<string>,
+  /** Text so far, each time it changes while the user talks. */
+  onPartial?: (text: string) => void,
 ) => Promise<string>;
 
 /**
@@ -125,7 +127,7 @@ export type Transcribe = (
  * recognition toward those words.
  */
 export function makeTranscribe(transport: AsrTransport): Transcribe {
-  return async (config, chunks, hotwords = []) => {
+  return async (config, chunks, hotwords = [], onPartial) => {
     const request: Record<string, unknown> = {
       user: { uid: "voice-pilot" },
       audio: { format: "pcm", codec: "raw", rate: ASR_SAMPLE_RATE, bits: 16, channel: 1 },
@@ -189,7 +191,9 @@ export function makeTranscribe(transport: AsrTransport): Transcribe {
           typeof result === "object" &&
           typeof (result as { text?: unknown }).text === "string"
         ) {
-          text = (result as { text: string }).text;
+          const next = (result as { text: string }).text;
+          if (next !== text && !isLast(decoded)) onPartial?.(next);
+          text = next;
         }
         if (isLast(decoded)) settle.resolve();
       },

@@ -1,3 +1,5 @@
 <svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <path d="M27.5 37H82.5V56.5M49 37V53.5M35 79.5L49.5 98L64 83.5L78.5 98L93 79.5" stroke="white" stroke-width="10.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Closed outlines, not open strokes: Icon Composer's glass highlights the implicit closing edge of an open path. -->
+  <path d="M27.5 31.75H82.5A5.25 5.25 0 0 1 87.75 37V56.5A5.25 5.25 0 0 1 82.5 61.75A5.25 5.25 0 0 1 77.25 56.5V42.25H54.25V53.5A5.25 5.25 0 0 1 49 58.75A5.25 5.25 0 0 1 43.75 53.5V42.25H27.5A5.25 5.25 0 0 1 22.25 37A5.25 5.25 0 0 1 27.5 31.75Z" fill="white"/>
+  <path d="M30.868 82.739L45.368 101.239A5.25 5.25 0 0 0 53.212 101.712L64 90.925L74.788 101.712A5.25 5.25 0 0 0 82.632 101.239L97.132 82.739A5.25 5.25 0 0 0 96.239 75.368A5.25 5.25 0 0 0 88.868 76.261L78.023 90.098L67.712 79.788A5.25 5.25 0 0 0 60.288 79.788L49.977 90.098L39.132 76.261A5.25 5.25 0 0 0 31.761 75.368A5.25 5.25 0 0 0 30.868 82.739Z" fill="white"/>
 </svg>

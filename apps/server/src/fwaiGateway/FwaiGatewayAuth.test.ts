@@ -3,6 +3,7 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 
@@ -83,6 +84,69 @@ it.effect("refreshes a token close to expiry and keeps the rotated refresh token
       // A second read uses the stored token instead of spending the refresh token again.
       assert.equal(yield* auth.accessToken, "new-access");
       assert.deepEqual(h.refreshTokens, ["single-use-refresh"]);
+    }),
+  ),
+);
+
+it.effect("connects as the fwai_environment client, not the account client", () =>
+  provideStore(
+    Effect.gen(function* () {
+      const clientIds: Array<[string, unknown]> = [];
+      const http = HttpClient.make((request) =>
+        Effect.sync(() => {
+          const path = new URL(request.url).pathname;
+          const body =
+            request.body._tag === "Uint8Array"
+              ? JSON.parse(new TextDecoder().decode(request.body.body))
+              : {};
+          clientIds.push([path, body.client_id]);
+          const reply =
+            path === "/oauth/device/code"
+              ? Response.json({
+                  device_code: "device-1",
+                  user_code: "ABCD-EFGH",
+                  verification_uri: "https://api.fwai.space/device",
+                  expires_in: 600,
+                  interval: 1,
+                })
+              : path === "/oauth/token"
+                ? Response.json({
+                    token_type: "Bearer",
+                    access_token: "env-access",
+                    refresh_token: "env-refresh",
+                    expires_in: 3600,
+                  })
+                : new Response(null, { status: 500 });
+          return HttpClientResponse.fromWeb(request, reply);
+        }),
+      );
+      const layer = FwaiGatewayAuth.layer.pipe(
+        Layer.provide(Layer.succeed(HttpClient.HttpClient, http)),
+        Layer.provide(
+          Layer.mock(Settings.ServerSettingsService)({
+            updateSettings: () => Effect.die("unused"),
+          }),
+        ),
+      );
+      // The pending sign-in lives in the layer's scope, so the whole flow runs inside it.
+      yield* Effect.gen(function* () {
+        const auth = yield* FwaiGatewayAuth.FwaiGatewayAuth;
+        assert.deepEqual(yield* auth.connect, { userCode: "ABCD-EFGH" });
+        yield* TestClock.adjust("1 second");
+        yield* auth.state.pipe(
+          Stream.filter((state) => state.status === "connected"),
+          Stream.take(1),
+          Stream.runDrain,
+        );
+        assert.equal(yield* auth.accessToken, "env-access");
+      }).pipe(Effect.provide(layer));
+      assert.deepEqual(
+        clientIds.filter(([path]) => path.startsWith("/oauth/")),
+        [
+          ["/oauth/device/code", "fwai_environment"],
+          ["/oauth/token", "fwai_environment"],
+        ],
+      );
     }),
   ),
 );

@@ -32,6 +32,11 @@ export interface VoiceConfig {
   readonly newSessionMode: "approval-required" | "auto-accept-edits" | "auto" | "full-access";
   /** Spoken names from settings: alias → substring of a thread title, project name or id. */
   readonly aliases: Readonly<Record<string, string>>;
+  /**
+   * Read out news from every session, not only the current one; off puts news from other
+   * sessions in the inbox with a short hint.
+   */
+  readonly announceAll?: boolean;
 }
 
 export interface VoiceRelay {

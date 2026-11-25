@@ -147,6 +147,8 @@ export class ServerSecretStore extends Context.Service<
       bytes: number,
     ) => Effect.Effect<Uint8Array, SecretStoreError>;
     readonly remove: (name: string) => Effect.Effect<void, SecretStoreError>;
+    /** fwai: names of the stored secrets starting with `prefix`; absent on in-memory stores. */
+    readonly listNames?: (prefix: string) => Effect.Effect<ReadonlyArray<string>, SecretStoreError>;
   }
 >()("t3/auth/ServerSecretStore") {}
 
@@ -318,6 +320,23 @@ export const make = Effect.gen(function* () {
       Effect.withSpan("ServerSecretStore.remove"),
     );
 
+  const listNames: NonNullable<ServerSecretStore["Service"]["listNames"]> = (prefix) =>
+    fileSystem.readDirectory(serverConfig.secretsDir).pipe(
+      Effect.map((files) =>
+        files.flatMap((file) =>
+          file.startsWith(prefix) && file.endsWith(".bin") ? [file.slice(0, -".bin".length)] : [],
+        ),
+      ),
+      Effect.mapError(
+        (cause) =>
+          new SecretStoreReadError({
+            resource: `secrets directory ${serverConfig.secretsDir}`,
+            cause,
+          }),
+      ),
+      Effect.withSpan("ServerSecretStore.listNames"),
+    );
+
   return ServerSecretStore.of({
     directory: serverConfig.secretsDir,
     get,
@@ -325,6 +344,7 @@ export const make = Effect.gen(function* () {
     create,
     getOrCreateRandom,
     remove,
+    listNames,
   });
 });
 
