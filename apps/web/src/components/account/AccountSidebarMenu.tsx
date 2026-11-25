@@ -1,5 +1,13 @@
-import { LogOutIcon, ServerIcon, SmartphoneIcon, UserRoundIcon } from "lucide-react";
-import { useState } from "react";
+import { fwaiSignInAgainNotice } from "@t3tools/client-runtime/fwai-gateway";
+import {
+  CircleAlertIcon,
+  LogInIcon,
+  LogOutIcon,
+  ServerIcon,
+  SmartphoneIcon,
+  UserRoundIcon,
+} from "lucide-react";
+import { useState, useSyncExternalStore } from "react";
 
 import { hasCloudPublicConfig } from "../../cloud/publicConfig";
 import { getFwaiAccountSession } from "../../fwaiAccount/session";
@@ -16,7 +24,15 @@ export function AccountSidebarMenu() {
 function SignedInAccountSidebarMenu() {
   const state = useFwaiAccount();
   const [page, setPage] = useState<AccountPageId | null>(null);
+  const signInAgain = useSyncExternalStore(
+    fwaiSignInAgainNotice.subscribe,
+    fwaiSignInAgainNotice.get,
+  );
   if (state.status !== "signedIn") return null;
+  const signOut = () => {
+    fwaiSignInAgainNotice.clear();
+    void getFwaiAccountSession()?.signOut();
+  };
 
   return (
     <>
@@ -26,6 +42,7 @@ function SignedInAccountSidebarMenu() {
             <MenuTrigger render={<SidebarMenuButton />}>
               <UserRoundIcon />
               <span>{state.user.username}</span>
+              {signInAgain ? <CircleAlertIcon className="ml-auto text-warning" /> : null}
             </MenuTrigger>
             <MenuPopup align="start" side="top">
               {state.user.email ? (
@@ -40,7 +57,18 @@ function SignedInAccountSidebarMenu() {
                 fwai Connect
               </MenuItem>
               <MenuSeparator />
-              <MenuItem onClick={() => void getFwaiAccountSession()?.signOut()}>
+              {signInAgain ? (
+                <>
+                  <div className="max-w-64 px-2 py-1 text-xs text-muted-foreground">
+                    Sign in again so fwai can recognize this app.
+                  </div>
+                  <MenuItem onClick={signOut}>
+                    <LogInIcon />
+                    Sign in again
+                  </MenuItem>
+                </>
+              ) : null}
+              <MenuItem onClick={signOut}>
                 <LogOutIcon />
                 Sign out
               </MenuItem>

@@ -551,6 +551,11 @@ export interface ProviderAdapterV2SessionRuntime {
   /** Manager runtimes broadcast independent subscriptions; adapters may expose only a single-consumer stream. */
   readonly subscribeEvents?: Effect.Effect<ProviderAdapterV2EventSubscription>;
   readonly hasPendingBackgroundWork?: Effect.Effect<boolean>;
+  /**
+   * True when a header the session's process was launched with (fwai attestation) is about to
+   * expire; the manager then restarts the idle session before the next turn.
+   */
+  readonly attestationRenewalDue?: Effect.Effect<boolean>;
   /** Overrides the session-wide probe so sibling threads cannot keep this root subscription open. */
   readonly hasPendingBackgroundWorkForThread?: (
     providerThread: OrchestrationV2ProviderThread,

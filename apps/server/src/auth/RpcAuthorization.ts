@@ -73,6 +73,8 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.codexAuthCallbackSubscribe]: AuthProvidersManageScope,
   [WS_METHODS.fwaiGatewaySubscribe]: AuthProvidersManageScope,
   [WS_METHODS.fwaiGatewayConnect]: AuthProvidersManageScope,
+  [WS_METHODS.fwaiAttestationRegistration]: AuthProvidersManageScope,
+  [WS_METHODS.fwaiAttestationReport]: AuthProvidersManageScope,
   [WS_METHODS.fwaiGatewayDisconnect]: AuthProvidersManageScope,
   [WS_METHODS.providerAuthRespond]: AuthProvidersManageScope,
   [WS_METHODS.providerAuthCancel]: AuthProvidersManageScope,

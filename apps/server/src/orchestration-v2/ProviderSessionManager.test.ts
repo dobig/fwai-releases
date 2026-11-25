@@ -330,6 +330,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
     }) => Effect.Effect<void>;
     readonly hasPendingBackgroundWork?: Effect.Effect<boolean>;
     readonly hasPendingBackgroundWorkForThread?: Effect.Effect<boolean>;
+    readonly attestationRenewalDue?: Effect.Effect<boolean>;
     readonly backgroundTasksEndWithProcess?: boolean;
     readonly hangSessionScopeClose?: boolean;
     readonly startTurn?: Effect.Effect<void>;
@@ -415,6 +416,9 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
           ...(options.hasPendingBackgroundWork === undefined
             ? {}
             : { hasPendingBackgroundWork: options.hasPendingBackgroundWork }),
+          ...(options.attestationRenewalDue === undefined
+            ? {}
+            : { attestationRenewalDue: options.attestationRenewalDue }),
           ...(options.hasPendingBackgroundWorkForThread === undefined
             ? {}
             : {
@@ -477,6 +481,7 @@ function layerTest(input: {
   };
   readonly hasPendingBackgroundWork?: Effect.Effect<boolean>;
   readonly hasPendingBackgroundWorkForThread?: Effect.Effect<boolean>;
+  readonly attestationRenewalDue?: Effect.Effect<boolean>;
   readonly backgroundTasksEndWithProcess?: boolean;
   readonly hangSessionScopeClose?: boolean;
   readonly startTurn?: Effect.Effect<void>;
@@ -505,6 +510,9 @@ function layerTest(input: {
       ...(input.hasPendingBackgroundWork === undefined
         ? {}
         : { hasPendingBackgroundWork: input.hasPendingBackgroundWork }),
+      ...(input.attestationRenewalDue === undefined
+        ? {}
+        : { attestationRenewalDue: input.attestationRenewalDue }),
       ...(input.hasPendingBackgroundWorkForThread === undefined
         ? {}
         : { hasPendingBackgroundWorkForThread: input.hasPendingBackgroundWorkForThread }),
@@ -951,6 +959,60 @@ it.effect("ProviderSessionManagerV2 closes every live session for a provider ins
       ),
     );
   }),
+);
+
+it.effect(
+  "ProviderSessionManagerV2 restarts an idle session whose attestation is due before reusing it",
+  () =>
+    Effect.gen(function* () {
+      const state = yield* Ref.make(emptyState);
+      const renewalDue = yield* Ref.make(false);
+      const backgroundWork = yield* Ref.make(false);
+
+      const effect = Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const idAllocator = yield* IdAllocator.IdAllocatorV2;
+        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make("thread-provider-session-manager-attestation-renewal");
+        const providerSessionId = yield* idAllocator.allocate.providerSession({
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+        });
+        yield* eventSink.write({
+          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
+        });
+        const open = manager.open({ threadId, providerSessionId, modelSelection, runtimePolicy });
+
+        const first = yield* open;
+        assert.strictEqual(yield* open, first);
+        assert.equal((yield* Ref.get(state)).openCount, 1);
+
+        // Background work would be cut off by a restart, so the session is kept.
+        yield* Ref.set(renewalDue, true);
+        yield* Ref.set(backgroundWork, true);
+        assert.strictEqual(yield* open, first);
+        assert.equal((yield* Ref.get(state)).openCount, 1);
+
+        yield* Ref.set(backgroundWork, false);
+        const renewed = yield* open;
+        assert.notStrictEqual(renewed, first);
+        const after = yield* Ref.get(state);
+        assert.equal(after.openCount, 2);
+        assert.equal(after.closeCount, 1);
+      });
+
+      yield* effect.pipe(
+        Effect.provide(
+          layerTest({
+            state,
+            idleTimeoutMs: 60_000,
+            attestationRenewalDue: Ref.get(renewalDue),
+            hasPendingBackgroundWork: Ref.get(backgroundWork),
+          }),
+        ),
+      );
+    }),
 );
 
 it.effect("ProviderSessionManagerV2 opens a duplicate session only once", () =>

@@ -2,6 +2,7 @@ import { fwaiAccessPermitsUse, type FwaiAccountSession } from "@t3tools/client-r
 import { type ReactNode, useEffect, useState } from "react";
 
 import { attachManagedRelayAccount } from "../cloud/managedAuth";
+import { FwaiAttestationSync } from "../fwaiGateway/FwaiAttestationSync";
 import { isGuestPage } from "../guestPage";
 import {
   FwaiAccountLoadingScreen,
@@ -76,6 +77,11 @@ function FwaiAccountGate({
         return <FwaiSubscriptionRequiredScreen session={session} user={state.user} />;
       }
       if (state.access === "checking" && signedInHere) return <FwaiAccountLoadingScreen />;
-      return children;
+      return (
+        <>
+          {children}
+          <FwaiAttestationSync accountId={state.user.id} />
+        </>
+      );
   }
 }

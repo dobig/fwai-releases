@@ -139,6 +139,15 @@ export async function approveFwaiDeviceCode(userCode: string): Promise<void> {
   await SharedFwaiGateway.approveFwaiDeviceCode(options, userCode);
 }
 
+/** Registers a connected environment's attestation key with this app's account; never throws. */
+export async function syncFwaiEnvironmentAttestation(
+  environment: SharedFwaiGateway.FwaiAttestationEnvironment,
+): Promise<void> {
+  const options = gatewayClientOptions();
+  if (options === null) return;
+  await SharedFwaiGateway.syncFwaiEnvironmentAttestation(options, environment);
+}
+
 export async function fetchFwaiPlanSummary() {
   const options = gatewayClientOptions();
   return options === null ? null : SharedFwaiGateway.fetchFwaiPlanSummary(options);
