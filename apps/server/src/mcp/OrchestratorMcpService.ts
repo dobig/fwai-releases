@@ -26,6 +26,10 @@ import {
   type OrchestratorMcpDeleteScheduledTaskInput,
   type OrchestratorMcpRequestSecretInput,
   type OrchestratorMcpRequestSecretResult,
+  type OrchestratorMcpSecretListResult,
+  type OrchestrationV2SecretRequestVault,
+  VAULT_TOOL_FAILURE_MESSAGES,
+  type VaultToolFailureReason,
   type OrchestratorMcpDeleteScheduledTaskResult,
   type OrchestratorMcpListScheduledTasksResult,
   type OrchestratorMcpRuntimeMode,
@@ -113,6 +117,7 @@ import {
 } from "./McpInvocationContext.ts";
 import * as Metrics from "../observability/Metrics.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+import * as VaultService from "../vault/VaultService.ts";
 import { narrowerRuntimeMode } from "../orchestration-v2/RuntimePolicy.ts";
 
 const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60 * 1_000;
@@ -177,6 +182,10 @@ export interface OrchestratorMcpServiceShape {
     scope: McpInvocationScope,
     input: OrchestratorMcpDeleteScheduledTaskInput,
   ) => Effect.Effect<OrchestratorMcpDeleteScheduledTaskResult, OrchestratorMcpFailure>;
+  /** fwai: vault entries in scope for the caller's project; the owner's runs only. */
+  readonly listSecrets: (
+    scope: McpInvocationScope,
+  ) => Effect.Effect<OrchestratorMcpSecretListResult, OrchestratorMcpFailure>;
   /** Only status reaches the agent, never this value. */
   readonly requestSecret: (
     scope: McpInvocationScope,
@@ -214,6 +223,11 @@ const isThreadManagementError = Schema.is(ThreadManagementService.ThreadManageme
 function failure(code: OrchestratorMcpFailure["code"], message: string): OrchestratorMcpFailure {
   return new OrchestratorMcpFailure({ code, message });
 }
+
+const vaultFailure = (
+  reason: Exclude<VaultToolFailureReason, "domain_mismatch" | "vault_unavailable_on_host">,
+) => failure(reason, VAULT_TOOL_FAILURE_MESSAGES[reason]);
+const vaultReadFailure = () => failure("orchestration_error", "Could not read the vault.");
 
 /** Background subagents retain credentials until provider exit; archived threads and other instances cannot act. */
 export const isLiveCallerShell = (
@@ -1090,6 +1104,7 @@ const make = Effect.gen(function* () {
         )
       : Effect.succeed(project.defaultModelSelection);
   const secretRequests = yield* SecretRequests.SecretRequests;
+  const vault = yield* VaultService.VaultService;
 
   const requireCapability = (scope: McpInvocationScope) =>
     scope.capabilities.has("orchestration")
@@ -1158,6 +1173,7 @@ const make = Effect.gen(function* () {
           runtimeMode: clientRuntimeModeCeiling(scope.client),
           interactionMode: "default",
         } satisfies { runtimeMode: RuntimeMode; interactionMode: ProviderInteractionMode },
+        actingAccountId: undefined,
       } as const;
     }
     const parent = yield* loadProjection(scope.thread.threadId);
@@ -1171,6 +1187,7 @@ const make = Effect.gen(function* () {
         runtimeMode: narrowerRuntimeMode(parent.thread.runtimeMode, activeRun?.runtimeModeCeiling),
         interactionMode: parent.thread.interactionMode,
       },
+      actingAccountId: activeRun?.actingAccountId,
     } as const;
   });
 
@@ -1875,7 +1892,7 @@ const make = Effect.gen(function* () {
 
   return OrchestratorMcpService.of({
     scheduleTask: Effect.fn("OrchestratorMcpService.scheduleTask")(function* (scope, input) {
-      const { parent, limits } = yield* loadCaller(scope);
+      const { parent, limits, actingAccountId } = yield* loadCaller(scope);
       const projectId = yield* resolveProjectTarget(parent, input.projectId);
       yield* assertLiveCallerForOtherProject(scope, parent, projectId);
       const project = yield* requireProject(projectId);
@@ -1921,7 +1938,7 @@ const make = Effect.gen(function* () {
             }),
       };
       const { task } = yield* scheduledTasks
-        .upsert(upsertInput)
+        .upsert(upsertInput, { actingAccountId })
         .pipe(
           Effect.mapError((error) =>
             failure("orchestration_error", `Could not schedule task: ${error.message}`),
@@ -1950,7 +1967,7 @@ const make = Effect.gen(function* () {
     ),
     updateScheduledTask: Effect.fn("OrchestratorMcpService.updateScheduledTask")(
       function* (scope, input) {
-        const { parent, limits } = yield* loadCaller(scope);
+        const { parent, limits, actingAccountId } = yield* loadCaller(scope);
         const existing = yield* loadScheduledTask(input.scheduledTaskId, limits);
         yield* assertLiveCallerForOtherProject(scope, parent, existing.projectId);
         if (
@@ -1991,7 +2008,7 @@ const make = Effect.gen(function* () {
           creationSource: existing.creationSource,
         };
         const { task } = yield* scheduledTasks
-          .upsert(upsertInput)
+          .upsert(upsertInput, { actingAccountId })
           .pipe(
             Effect.mapError((error) =>
               failure("orchestration_error", `Could not update scheduled task: ${error.message}`),
@@ -2035,6 +2052,58 @@ const make = Effect.gen(function* () {
       const turnItemId = TurnItemId.make(
         `turn-item:secret-request:${stablePart(threadId)}:${stablePart(key)}`,
       );
+      const deliverSaved = Effect.gen(function* () {
+        if (input.delivery === "file") {
+          const file = yield* secretRequests
+            .saveToFile({ threadId, turnItemId })
+            .pipe(Effect.mapError((error) => failure("orchestration_error", error.message)));
+          return { status: "saved" as const, file };
+        }
+        const secretRef = yield* secretRequests.savedRef({ threadId: threadId, turnItemId });
+        if (Option.isNone(secretRef)) {
+          return yield* failure(
+            "orchestration_error",
+            "The user saved the secret, but it could not be read. Ask again with a new clientRequestId.",
+          );
+        }
+        return { status: "saved" as const, secretRef: secretRef.value };
+      });
+      // fwai: a named vault entry. The owner's runs use it with no card; another
+      // account's run asks the owner to allow this one use, through the same card and wait.
+      let vaultApproval: OrchestrationV2SecretRequestVault | undefined;
+      if (input.name !== undefined) {
+        const lookup = yield* vault
+          .findByName({ projectId: parent.thread.projectId, name: input.name })
+          .pipe(Effect.mapError(vaultReadFailure));
+        if (lookup.type === "out_of_scope" || lookup.type === "ambiguous_name") {
+          return yield* vaultFailure(lookup.type);
+        }
+        if (lookup.type === "ok" && run.actingAccountId === undefined) {
+          yield* secretRequests
+            .useVaultEntry({
+              threadId,
+              runId,
+              nodeId,
+              turnItemId,
+              projectId: parent.thread.projectId,
+              entry: lookup.entry,
+              label: input.label,
+              reason: input.reason,
+              ...(input.placeholder === undefined ? {} : { placeholder: input.placeholder }),
+              ...(input.delivery === "file" ? { delivery: "file" as const } : {}),
+            })
+            .pipe(Effect.mapError((error) => failure("orchestration_error", error.message)));
+          yield* Metrics.increment(Metrics.secretRequestsTotal, { status: "vault" });
+          return yield* deliverSaved;
+        }
+        if (lookup.type === "ok") {
+          vaultApproval = {
+            entryId: lookup.entry.id,
+            entryName: lookup.entry.name,
+            requestedByAccountId: run.actingAccountId,
+          };
+        }
+      }
       const record = (secretStatus: "pending" | "cancelled") =>
         threadManagement
           .dispatch({
@@ -2053,6 +2122,7 @@ const make = Effect.gen(function* () {
             ...(input.placeholder === undefined ? {} : { placeholder: input.placeholder }),
             ...(input.delivery === "file" ? { delivery: "file" as const } : {}),
             secretStatus,
+            ...(vaultApproval === undefined ? {} : { vault: vaultApproval }),
           })
           .pipe(
             Effect.mapError((error) =>
@@ -2129,21 +2199,31 @@ const make = Effect.gen(function* () {
             );
       yield* Effect.annotateCurrentSpan({ "secret_request.status": status });
       yield* Metrics.increment(Metrics.secretRequestsTotal, { status });
+      if (vaultApproval !== undefined && status !== "saved") {
+        return yield* vaultFailure("approval_denied");
+      }
       if (status !== "saved") return { status };
-      if (input.delivery === "file") {
-        const file = yield* secretRequests
-          .saveToFile({ threadId, turnItemId })
-          .pipe(Effect.mapError((error) => failure("orchestration_error", error.message)));
-        return { status, file };
+      return yield* deliverSaved;
+    }),
+
+    listSecrets: Effect.fn("OrchestratorMcpService.listSecrets")(function* (scope) {
+      const { parent } = yield* loadThreadCaller(scope, "secret_list");
+      const run = ThreadManagementService.latestActiveRun(parent);
+      if (run === undefined) {
+        return yield* failure("parent_not_active", "Listing vault secrets requires an active run.");
       }
-      const secretRef = yield* secretRequests.savedRef({ threadId: threadId, turnItemId });
-      if (Option.isNone(secretRef)) {
-        return yield* failure(
-          "orchestration_error",
-          "The user saved the secret, but it could not be read. Ask again with a new clientRequestId.",
-        );
-      }
-      return { status, secretRef: secretRef.value };
+      if (!ThreadManagementService.isOwnerRun(run)) return yield* vaultFailure("not_allowed");
+      const entries = yield* vault
+        .entriesForProject(parent.thread.projectId)
+        .pipe(Effect.mapError(vaultReadFailure));
+      return {
+        entries: entries.map((entry) => ({
+          name: entry.name,
+          kind: entry.kind,
+          ...(entry.username === undefined ? {} : { username: entry.username }),
+          domains: entry.domains,
+        })),
+      };
     }),
 
     capabilities: Effect.fn("OrchestratorMcpService.capabilities")(function* (scope, input = {}) {
@@ -3043,4 +3123,5 @@ export const layer: Layer.Layer<
   | ProjectService.ProjectService
   | SecretRequests.SecretRequests
   | ServerSettings.ServerSettingsService
+  | VaultService.VaultService
 > = Layer.effect(OrchestratorMcpService, make);

@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 
-import { EnvironmentId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { EnvironmentId, SecretRef, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
   PREVIEW_VIEWPORT_MAX_AREA,
   PreviewRenderedViewportSize,
@@ -11,6 +11,7 @@ import {
 } from "./preview.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import { BrowserProfileId } from "./browserProfile.ts";
+import { VAULT_TOOL_FAILURE_MESSAGES, VaultEntryId } from "./vault.ts";
 
 const BoundedUrl = Schema.String.check(Schema.isTrimmed())
   .check(Schema.isNonEmpty())
@@ -51,6 +52,8 @@ export const PREVIEW_AUTOMATION_SERVER_OPERATIONS = [
   "hover",
   "select",
   "drag",
+  // fwai: carries a vault entry id, never its value; the host reads and types it.
+  "typeVaultSecret",
 ] as const;
 export const PreviewAutomationOperation = Schema.Literals(PREVIEW_AUTOMATION_SERVER_OPERATIONS);
 export type PreviewAutomationOperation = typeof PreviewAutomationOperation.Type;
@@ -368,9 +371,8 @@ export const PreviewAutomationUploadInput = Schema.Struct({
 );
 export type PreviewAutomationUploadInput = typeof PreviewAutomationUploadInput.Type;
 
-export const PreviewAutomationTypeInput = Schema.Struct({
+const TypeTargetFields = {
   ...PreviewAutomationTabTargetFields,
-  text: Schema.String,
   selector: Schema.optional(LegacySelector),
   locator: Schema.optional(Locator),
   clear: Schema.optional(
@@ -379,14 +381,40 @@ export const PreviewAutomationTypeInput = Schema.Struct({
     }),
   ),
   timeoutMs: OptionalTimeoutMs,
-}).check(
-  Schema.makeFilter(
-    (input) =>
-      !(input.selector !== undefined && input.locator !== undefined) ||
-      "Provide at most one of selector or locator.",
-  ),
+};
+
+const singleTypeTarget = Schema.makeFilter(
+  (input: { readonly selector?: string | undefined; readonly locator?: string | undefined }) =>
+    !(input.selector !== undefined && input.locator !== undefined) ||
+    "Provide at most one of selector or locator.",
 );
+
+export const PreviewAutomationTypeInput = Schema.Struct({
+  ...TypeTargetFields,
+  text: Schema.optional(Schema.String),
+  secretRef: Schema.optional(
+    SecretRef.annotate({
+      description:
+        "A vault secretRef from request_secret, typed without revealing it, instead of text. Only on the entry's domains.",
+    }),
+  ),
+})
+  .check(singleTypeTarget)
+  .check(
+    Schema.makeFilter(
+      (input) =>
+        (input.text === undefined) !== (input.secretRef === undefined) ||
+        "Provide exactly one of text or secretRef.",
+    ),
+  );
 export type PreviewAutomationTypeInput = typeof PreviewAutomationTypeInput.Type;
+
+export const PreviewAutomationTypeVaultSecretInput = Schema.Struct({
+  ...TypeTargetFields,
+  entryId: VaultEntryId,
+}).check(singleTypeTarget);
+export type PreviewAutomationTypeVaultSecretInput =
+  typeof PreviewAutomationTypeVaultSecretInput.Type;
 
 export const PreviewAutomationPressInput = Schema.Struct({
   ...PreviewAutomationTabTargetFields,
@@ -915,6 +943,25 @@ export class PreviewAutomationRecordingDeadlineExpiredError extends Schema.Tagge
   }
 }
 
+export const PreviewAutomationVaultFillFailure = Schema.Literals([
+  "domain_mismatch",
+  "vault_unavailable_on_host",
+]);
+export type PreviewAutomationVaultFillFailure = typeof PreviewAutomationVaultFillFailure.Type;
+
+export class PreviewAutomationVaultFillError extends Schema.TaggedError<PreviewAutomationVaultFillError>()(
+  "PreviewAutomationVaultFillError",
+  {
+    threadId: ThreadId,
+    reason: PreviewAutomationVaultFillFailure,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return VAULT_TOOL_FAILURE_MESSAGES[this.reason];
+  }
+}
+
 export const PreviewAutomationError = Schema.Union([
   PreviewAutomationRecordingTransferError,
   PreviewAutomationRecordingDesktopUpdateRequiredError,
@@ -934,6 +981,7 @@ export const PreviewAutomationError = Schema.Union([
   PreviewAutomationRequestQueueClosedError,
   PreviewAutomationRemoteUnavailableError,
   PreviewAutomationMalformedResponseError,
+  PreviewAutomationVaultFillError,
 ]);
 export type PreviewAutomationError = typeof PreviewAutomationError.Type;
 

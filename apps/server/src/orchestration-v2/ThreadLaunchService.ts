@@ -96,6 +96,8 @@ export interface ThreadLaunchInput {
   };
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
+  /** Server-set: the account the initial message's run acts for; absent for the owner. */
+  readonly actingAccountId?: string;
 }
 
 type PreparationInput = Pick<
@@ -961,6 +963,9 @@ const make = Effect.gen(function* () {
               dispatchMode: { type: "defer_start", workspaceStrategy },
               createdBy: input.createdBy,
               creationSource: input.creationSource,
+              ...(input.actingAccountId === undefined
+                ? {}
+                : { actingAccountId: input.actingAccountId }),
             })
             .pipe(Effect.mapError(mapError(input, "dispatch-message", threadId)));
           // A concurrent retry can read no receipt and still replay the dispatch.

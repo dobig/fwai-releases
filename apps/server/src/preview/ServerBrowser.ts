@@ -32,6 +32,7 @@ import {
   type PreviewAutomationSetColorSchemeInput,
   type PreviewAutomationStatus,
   type PreviewAutomationTypeInput,
+  type PreviewAutomationTypeVaultSecretInput,
   type PreviewAutomationUploadInput,
   type PreviewAutomationWaitForInput,
   PreviewClearProfileError,
@@ -41,6 +42,7 @@ import {
   type PreviewViewportSetting,
   ThreadId,
   SERVER_BROWSER_AUTOMATION_CLIENT_ID,
+  VAULT_TOOL_FAILURE_MESSAGES,
   type PreviewAppearancePreference,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -85,6 +87,7 @@ import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
 import { installPdfDocumentNavigation, isPdfAssetUrl } from "./PdfDocumentNavigation.ts";
+import * as VaultService from "../vault/VaultService.ts";
 
 const SERVER_HOST_CLIENT_ID = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
 const RENDER_SCALE = 2;
@@ -455,6 +458,7 @@ const make = Effect.gen(function* () {
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const previewBrowser = yield* PreviewBrowser.PreviewBrowser;
   const desktopChannel = yield* DesktopBrowserChannel.DesktopBrowserChannel;
+  const vault = yield* VaultService.VaultService;
   const agentTurns = yield* (yield* PreviewAgentActivity.PreviewAgentActivity).changes;
   const runFork = Effect.runForkWith(yield* Effect.context<never>());
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
@@ -1693,6 +1697,32 @@ const make = Effect.gen(function* () {
     return tab;
   };
 
+  // Without the desktop channel, a desktop tab lives on another machine; never read the value for it.
+  const refuseUnhostedSecretTab = async (request: PreviewAutomationRequest) => {
+    if (desktopChannel.available) return;
+    const hosted =
+      request.tabId === undefined
+        ? latestThreadTab(request.threadId, request.agentSessionId)
+        : tabs.get(tabKey(request.threadId, request.tabId));
+    if (hosted) return;
+    const { sessions } = await runPromise(
+      manager.list({ threadId: ThreadId.make(request.threadId) }),
+    );
+    if (
+      sessions.some(
+        (session) =>
+          session.runtime !== "server" &&
+          (request.tabId === undefined || session.tabId === request.tabId),
+      )
+    ) {
+      throw new ServerBrowserPage.ServerBrowserOperationError(
+        "PreviewAutomationVaultFillError",
+        VAULT_TOOL_FAILURE_MESSAGES.vault_unavailable_on_host,
+        "vault_unavailable_on_host",
+      );
+    }
+  };
+
   const markUsed = (request: PreviewAutomationRequest) => {
     const now = Date.now();
     for (const tab of tabs.values()) {
@@ -1860,6 +1890,7 @@ const make = Effect.gen(function* () {
         return tab.control.agent(request.agentSessionId ?? "", () => stopRecording(tab));
       }
     }
+    if (request.operation === "typeVaultSecret") await refuseUnhostedSecretTab(request);
     const tab = await requireTab(request);
     // Closing must unblock an action waiting on a dialog, without queueing behind it.
     if (request.operation === "close") {
@@ -1991,6 +2022,15 @@ const make = Effect.gen(function* () {
         return recordAction(tab, "type", () =>
           ServerBrowserPage.type(tab.page, input as PreviewAutomationTypeInput),
         );
+      case "typeVaultSecret": {
+        const { entryId, ...target } = input as PreviewAutomationTypeVaultSecretInput;
+        return recordAction(tab, "type", () =>
+          ServerBrowserPage.typeSecret(tab.page, target, {
+            value: () => runPromise(vault.readValue(entryId)),
+            originAllowed: (url) => runPromise(vault.originAllowed({ id: entryId, url })),
+          }),
+        );
+      }
       case "press":
         return recordAction(tab, "press", () =>
           ServerBrowserPage.press(tab.page, input as PreviewAutomationPressInput),

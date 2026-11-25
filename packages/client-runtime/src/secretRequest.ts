@@ -1,4 +1,9 @@
-import type { OrchestrationV2TurnItem, SecretRequestAnswerInput } from "@t3tools/contracts";
+import type {
+  OrchestrationV2TurnItem,
+  SecretRequestAnswerInput,
+  VaultEntryId,
+  VaultSaveFromRequest,
+} from "@t3tools/contracts";
 
 export type SecretRequestItem = Extract<
   OrchestrationV2TurnItem,
@@ -37,10 +42,10 @@ const ENDED_DISPLAY: SecretRequestDisplay = {
   label: "Request ended",
 };
 const PENDING_DISPLAY: SecretRequestDisplay = { kind: "pending" };
-const PENDING_ELSEWHERE_DISPLAY: SecretRequestDisplay = {
+const PENDING_ELSEWHERE_DISPLAY = {
   kind: "pending-elsewhere",
   label: "Waiting for an answer in the original thread",
-};
+} as const satisfies SecretRequestDisplay;
 
 /**
  * `visibility` is the projected row's: a request inherited from another
@@ -62,16 +67,45 @@ export function secretRequestDisplay(
   }
 }
 
+export type SecretRequestReply =
+  | {
+      readonly type: "save";
+      readonly secret: string;
+      readonly saveToVault?: VaultSaveFromRequest | undefined;
+    }
+  | { readonly type: "vault"; readonly entryId: VaultEntryId; readonly alsoAllowProject?: boolean }
+  | { readonly type: "decline" };
+
 export function secretRequestAnswerInput(
   item: Pick<SecretRequestItem, "id" | "threadId">,
-  answer: { readonly type: "save"; readonly secret: string } | { readonly type: "decline" },
+  reply: SecretRequestReply,
 ): SecretRequestAnswerInput | null {
-  if (answer.type === "decline") {
-    return { threadId: item.threadId, turnItemId: item.id, answer: { type: "decline" } };
+  const request = { threadId: item.threadId, turnItemId: item.id };
+  switch (reply.type) {
+    case "decline":
+      return { ...request, answer: { type: "decline" } };
+    case "vault":
+      return {
+        ...request,
+        answer: {
+          type: "vault",
+          entryId: reply.entryId,
+          ...(reply.alsoAllowProject ? { alsoAllowProject: true } : {}),
+        },
+      };
+    case "save": {
+      const secret = reply.secret.trim();
+      if (secret.length === 0) return null;
+      return {
+        ...request,
+        answer: {
+          type: "save",
+          secret,
+          ...(reply.saveToVault ? { saveToVault: reply.saveToVault } : {}),
+        },
+      };
+    }
   }
-  const secret = answer.secret.trim();
-  if (secret.length === 0) return null;
-  return { threadId: item.threadId, turnItemId: item.id, answer: { type: "save", secret } };
 }
 
 const USER_FACING_FAILURE_TAGS = new Set(["SecretRequestError", "EnvironmentAuthorizationError"]);
@@ -95,3 +129,57 @@ export function secretRequestFailureMessage(failure: unknown): string {
   }
   return "Could not answer the request. Try again.";
 }
+
+export type VaultRequestDisplay =
+  | {
+      readonly kind: "approval-pending";
+      readonly entryName: string;
+      readonly requestedByAccountId: string;
+    }
+  | { readonly kind: "pending-elsewhere"; readonly label: string }
+  | {
+      readonly kind: "done";
+      readonly outcome: "used" | "denied" | "expired";
+      readonly label: string;
+    };
+
+/**
+ * A request naming a vault entry is never answered with a value: the owner's run used it, or a
+ * run acting for `requestedByAccountId` waits for the owner to allow it. Null for other requests.
+ */
+export function vaultRequestDisplay(
+  item: Pick<SecretRequestItem, "secretStatus" | "delivery" | "vault">,
+  visibility: "local" | "inherited" | "synthetic",
+): VaultRequestDisplay | null {
+  const { vault } = item;
+  if (vault === undefined) return null;
+  const name = vault.entryName;
+  if (item.secretStatus === "pending" && vault.requestedByAccountId !== undefined) {
+    return visibility === "local"
+      ? {
+          kind: "approval-pending",
+          entryName: name,
+          requestedByAccountId: vault.requestedByAccountId,
+        }
+      : PENDING_ELSEWHERE_DISPLAY;
+  }
+  switch (item.secretStatus) {
+    case "declined":
+      return { kind: "done", outcome: "denied", label: `Denied use of ${name}` };
+    case "cancelled":
+      return { kind: "done", outcome: "expired", label: `Request to use ${name} expired` };
+    default:
+      return {
+        kind: "done",
+        outcome: "used",
+        label: item.delivery === "file" ? `A command can read ${name}` : `Used ${name}`,
+      };
+  }
+}
+
+export const vaultApprovalPrompt = (input: {
+  readonly requesterName: string;
+  readonly entryName: string;
+  readonly threadTitle: string | undefined;
+}) =>
+  `${input.requesterName} wants to use ${input.entryName}${input.threadTitle ? ` in ${input.threadTitle}` : ""}`;

@@ -1,4 +1,5 @@
 import type {
+  AuthAccountPrincipal,
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
   RuntimeMode,
@@ -48,6 +49,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
+import { isCollaboratorPrincipal } from "../threadShare/ThreadAccessPolicy.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -83,22 +85,33 @@ export function withCreationProvenance(
 }
 
 /**
- * Records who sent a client message and the mode its run may not exceed. Only the server sets
- * these, from the session; a client cannot claim either.
+ * Records who sent a client message, the account its run acts for and the mode it may not exceed.
+ * Only the server sets these, from the session; a client cannot claim any of them.
  */
 export function withMessageAuthor(
   command: OrchestrationV2Command,
-  authorAccountId: string | undefined,
+  principal: AuthAccountPrincipal | undefined,
   runtimeModeCeiling?: RuntimeMode,
 ): OrchestrationV2Command {
   if (command.type !== "message.dispatch") return command;
-  const { authorAccountId: _claimedAuthor, runtimeModeCeiling: _claimedCeiling, ...rest } = command;
+  const {
+    authorAccountId: _claimedAuthor,
+    runtimeModeCeiling: _claimedCeiling,
+    actingAccountId: _claimedActing,
+    ...rest
+  } = command;
   return {
     ...rest,
-    ...(authorAccountId === undefined ? {} : { authorAccountId }),
+    ...(principal === undefined ? {} : { authorAccountId: principal.accountId }),
+    // The owner's relay sessions carry its account too; only a collaborator's run records one.
+    ...(isCollaboratorPrincipal(principal) ? { actingAccountId: principal.accountId } : {}),
     ...(runtimeModeCeiling === undefined ? {} : { runtimeModeCeiling }),
   };
 }
+
+/** fwai: whether a run acts for the environment owner, which is what vault access keys on. */
+export const isOwnerRun = (run: Pick<OrchestrationV2Run, "actingAccountId">): boolean =>
+  run.actingAccountId === undefined;
 
 function existingThreadIdsForCommand(
   command: OrchestrationV2ServerCommand,
@@ -155,6 +168,8 @@ export interface ThreadManagementSendInput {
   readonly mode: ThreadManagementSendMode;
   readonly createdBy: OrchestrationV2Actor;
   readonly creationSource: OrchestrationV2CreationSource;
+  /** Server-set: the account the run acts for; absent for the owner. */
+  readonly actingAccountId?: string;
 }
 
 export interface ThreadManagementSendResult {
@@ -836,6 +851,7 @@ const make = Effect.gen(function* () {
       dispatchMode,
       createdBy: input.createdBy,
       creationSource: input.creationSource,
+      ...(input.actingAccountId === undefined ? {} : { actingAccountId: input.actingAccountId }),
     });
     const projection = yield* getProjectThreadRecords(input, ["runs", "messages", "turnItems"], {
       messageIds: [input.messageId],

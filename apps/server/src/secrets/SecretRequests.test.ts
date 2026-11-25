@@ -3,7 +3,12 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import {
+  NodeId,
   ProjectId,
+  RunId,
+  VaultEntryId,
+  type VaultScope,
+  type OrchestrationV2SecretRequestVault,
   type OrchestrationV2ServerCommand,
   SecretRef,
   ThreadId,
@@ -21,6 +26,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as VaultService from "../vault/VaultService.ts";
 import * as SecretRequests from "./SecretRequests.ts";
 
 const threadId = ThreadId.make("thread-orchestrator");
@@ -32,6 +38,7 @@ const withService = <A, E>(
     readonly service: SecretRequests.SecretRequests["Service"];
     readonly stored: Map<string, Uint8Array>;
     readonly dispatched: Array<OrchestrationV2ServerCommand>;
+    readonly vault: VaultService.VaultService["Service"];
   }) => Effect.Effect<A, E>,
   options: {
     readonly threadId?: ThreadId;
@@ -41,6 +48,8 @@ const withService = <A, E>(
     readonly removeFails?: boolean;
     readonly closedFirst?: boolean;
     readonly failedRecords?: number;
+    readonly vault?: OrchestrationV2SecretRequestVault;
+    readonly actingAccountId?: string;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -58,6 +67,8 @@ const withService = <A, E>(
           ...(options.directory === undefined ? {} : { directory: options.directory }),
           get: (name) => Effect.yieldNow.pipe(Effect.as(Option.fromNullishOr(stored.get(name)))),
           set: (name, value) => Effect.sync(() => void stored.set(name, value)),
+          listNames: (prefix) =>
+            Effect.sync(() => Array.from(stored.keys()).filter((name) => name.startsWith(prefix))),
           create: (name, value) =>
             stored.has(name)
               ? Effect.fail(
@@ -96,7 +107,15 @@ const withService = <A, E>(
         getThreadRecords: () =>
           Effect.succeed({
             thread: { projectId },
-            runs: [{ id: "run-1", status: options.runStatus ?? "running" }],
+            runs: [
+              {
+                id: "run-1",
+                status: options.runStatus ?? "running",
+                ...(options.actingAccountId === undefined
+                  ? {}
+                  : { actingAccountId: options.actingAccountId }),
+              },
+            ],
             turnItems: [
               {
                 id: turnItemId,
@@ -107,6 +126,7 @@ const withService = <A, E>(
                 label: "GitHub token",
                 reason: "Used as GH_TOKEN.",
                 ...(options.delivery === undefined ? {} : { delivery: options.delivery }),
+                ...(options.vault === undefined ? {} : { vault: options.vault }),
                 secretStatus,
               },
             ],
@@ -130,9 +150,36 @@ const withService = <A, E>(
     );
     return yield* Effect.gen(function* () {
       const service = yield* SecretRequests.SecretRequests;
-      return yield* body({ service, stored, dispatched });
-    }).pipe(Effect.provide(SecretRequests.layer.pipe(Layer.provide(layerDependencies))));
+      const vault = yield* VaultService.VaultService;
+      return yield* body({ service, stored, dispatched, vault });
+    }).pipe(
+      Effect.provide(
+        SecretRequests.layer.pipe(
+          Layer.provideMerge(VaultService.layer),
+          Layer.provide(layerDependencies),
+        ),
+      ),
+    );
   });
+
+// An entry with a fixed id, so the approval card can name it before the service starts.
+const seedEntry = (stored: Map<string, Uint8Array>, id: VaultEntryId) =>
+  stored.set(
+    `vault-entry-${id}`,
+    new TextEncoder().encode(
+      JSON.stringify({
+        id,
+        name: "GitHub",
+        kind: "password",
+        domains: ["github.com"],
+        scope: "global",
+        value: "vault-value-hunter2",
+        version: 1,
+        createdAt: "2026-11-24T00:00:00.000Z",
+        updatedAt: "2026-11-24T00:00:00.000Z",
+      }),
+    ),
+  );
 
 const valuesOf = (stored: Map<string, Uint8Array>) =>
   Array.from(stored.entries())
@@ -159,6 +206,27 @@ it.effect("a saved answer becomes a one-use ref, and the thread only learns it w
       assert.isFalse(valuesOf(stored).some((value) => value.includes("ghp_secret")));
       const again = yield* service.consume({ ref, projectId }).pipe(Effect.flip);
       assert.include(again.message, "already used");
+    }),
+  ),
+);
+
+it.effect("a form fill uses only a vault-backed ref, once, and leaves a typed one usable", () =>
+  withService(({ service, stored }) =>
+    Effect.gen(function* () {
+      yield* service.answer({
+        threadId,
+        turnItemId,
+        answer: { type: "save", secret: "ghp_secret" },
+      });
+      const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+      assert.isUndefined(yield* service.consumeForFill({ ref, projectId }));
+
+      const name = `secret-request-${ref.slice("secret-ref:".length)}`;
+      const record = JSON.parse(new TextDecoder().decode(stored.get(name)));
+      stored.set(name, new TextEncoder().encode(JSON.stringify({ ...record, entryId: "entry-1" })));
+      assert.equal(yield* service.consumeForFill({ ref, projectId }), "entry-1");
+      const again = yield* service.consumeForFill({ ref, projectId }).pipe(Effect.flip);
+      assert.equal(again.reason, "ref_unavailable");
     }),
   ),
 );
@@ -455,4 +523,219 @@ it.effect("a secret the card promised to keep from the agent is never written to
       assert.isTrue(valuesOf(stored).some((value) => value.includes("ghp_secret")));
     }),
   ),
+);
+
+const VAULT_VALUE = "vault-value-hunter2";
+const vaultEntry = (scope: VaultScope = "global", name = "Acme login") => ({
+  name,
+  kind: "password" as const,
+  domains: ["github.com"],
+  scope,
+  value: VAULT_VALUE,
+});
+const leaks = (value: unknown) => JSON.stringify(value).includes(VAULT_VALUE);
+
+it.effect(
+  "a card answered with a vault entry hands over a ref and the card learns only saved",
+  () =>
+    withService(
+      ({ service, dispatched, vault }) =>
+        Effect.gen(function* () {
+          const entry = yield* vault.create(vaultEntry({ projects: [projectId] }));
+          yield* service.answer({
+            threadId,
+            turnItemId,
+            answer: { type: "vault", entryId: entry.id },
+          });
+          assert.equal(dispatched.length, 1);
+          assert.include(dispatched[0] as object, { secretStatus: "saved" });
+          assert.notProperty(dispatched[0] as object, "vault");
+          assert.isFalse(JSON.stringify(dispatched).includes("Acme"));
+          assert.isFalse(leaks(dispatched));
+
+          const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+          assert.equal(yield* service.consumeForFill({ ref, projectId }), entry.id);
+          const used = yield* vault.get(entry.id);
+          assert.include(used.lastUse, {
+            threadId,
+            accountId: "user-bob",
+            delivery: "secretRef",
+          });
+        }),
+      { actingAccountId: "user-bob" },
+    ),
+);
+
+it.effect("an entry from another project is refused until Also allow adds this project", () =>
+  withService(({ service, vault }) =>
+    Effect.gen(function* () {
+      const other = ProjectId.make("project-other");
+      const entry = yield* vault.create(vaultEntry({ projects: [other] }));
+      const refused = yield* service
+        .answer({ threadId, turnItemId, answer: { type: "vault", entryId: entry.id } })
+        .pipe(Effect.flip);
+      assert.equal(refused.reason, "vault_entry_unavailable");
+      yield* service.answer({
+        threadId,
+        turnItemId,
+        answer: { type: "vault", entryId: entry.id, alsoAllowProject: true },
+      });
+      assert.deepEqual((yield* vault.get(entry.id)).scope, { projects: [other, projectId] });
+      const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+      assert.equal(yield* service.consume({ ref, projectId }), VAULT_VALUE);
+    }),
+  ),
+);
+
+it.effect("a typed answer saved to the vault succeeds or fails with its entry", () =>
+  withService(({ service, stored, dispatched, vault }) =>
+    Effect.gen(function* () {
+      yield* vault.create(vaultEntry());
+      const saveToVault = {
+        name: "Acme login",
+        kind: "password" as const,
+        scope: "global" as const,
+        domains: ["github.com"],
+      };
+      const taken = yield* service
+        .answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save", secret: "typed-value", saveToVault },
+        })
+        .pipe(Effect.flip);
+      assert.equal(taken.reason, "vault_name_taken");
+      assert.equal(dispatched.length, 0);
+      assert.isFalse(Array.from(stored.keys()).some((name) => name.startsWith("secret-request-r")));
+      assert.isTrue(Option.isNone(yield* service.savedRef({ threadId, turnItemId })));
+
+      yield* service.answer({
+        threadId,
+        turnItemId,
+        answer: {
+          type: "save",
+          secret: "typed-value",
+          saveToVault: { ...saveToVault, name: "Acme backup" },
+        },
+      });
+      const saved = (yield* vault.list()).entries.find((entry) => entry.name === "Acme backup");
+      assert.isDefined(saved);
+      assert.equal(yield* vault.readValue(saved!.id), "typed-value");
+      assert.isFalse(JSON.stringify(dispatched).includes("Acme"));
+      const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+      assert.equal(yield* service.consumeForFill({ ref, projectId }), saved!.id);
+    }),
+  ),
+);
+
+it.effect("a typed answer whose record fails takes its new vault entry back", () =>
+  withService(
+    ({ service, vault }) =>
+      Effect.gen(function* () {
+        const failed = yield* service
+          .answer({
+            threadId,
+            turnItemId,
+            answer: {
+              type: "save",
+              secret: "typed-value",
+              saveToVault: { name: "GH", kind: "token", scope: "global", domains: [] },
+            },
+          })
+          .pipe(Effect.flip);
+        assert.equal(failed.reason, "record_failed");
+        assert.deepEqual((yield* vault.list()).entries, []);
+      }),
+    { failedRecords: 1 },
+  ),
+);
+
+it.effect("the owner's run uses an entry with no card, shown as Used <name>", () =>
+  withService(({ service, dispatched, vault }) =>
+    Effect.gen(function* () {
+      const entry = yield* vault.create(vaultEntry());
+      yield* service.useVaultEntry({
+        threadId,
+        runId: RunId.make("run-1"),
+        nodeId: NodeId.make("node-root"),
+        turnItemId,
+        projectId,
+        entry,
+        label: "GitHub login",
+        reason: "Sign in to GitHub.",
+      });
+      assert.include(dispatched[0] as object, { secretStatus: "saved" });
+      assert.deepEqual((dispatched[0] as { vault?: unknown }).vault, {
+        entryId: entry.id,
+        entryName: "Acme login",
+      });
+      assert.isFalse(leaks(dispatched));
+      const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+      assert.equal(yield* service.consume({ ref, projectId }), VAULT_VALUE);
+      const used = yield* vault.get(entry.id);
+      assert.isUndefined(used.lastUse?.accountId);
+      assert.equal(used.lastUse?.delivery, "secretRef");
+    }),
+  ),
+);
+
+const approvalFor = (entryId: VaultEntryId) => ({
+  entryId,
+  entryName: "GitHub",
+  requestedByAccountId: "user-bob",
+});
+
+it.effect("the owner allows another account's run one use; the first answer wins", () =>
+  Effect.gen(function* () {
+    const entryId = VaultEntryId.make("entry-approval");
+    yield* withService(
+      ({ service, stored, dispatched, vault }) =>
+        Effect.gen(function* () {
+          seedEntry(stored, entryId);
+          const typed = yield* service
+            .answer({ threadId, turnItemId, answer: { type: "save", secret: "typed" } })
+            .pipe(Effect.flip);
+          assert.equal(typed.reason, "not_found", "an approval takes no typed value");
+
+          yield* service.answerVaultApproval({ threadId, turnItemId, decision: "allow" });
+          assert.include(dispatched[0] as object, { secretStatus: "saved" });
+          assert.deepEqual((dispatched[0] as { vault?: unknown }).vault, approvalFor(entryId));
+          assert.isFalse(leaks(dispatched));
+          const again = yield* service
+            .answerVaultApproval({ threadId, turnItemId, decision: "deny" })
+            .pipe(Effect.flip);
+          assert.equal(again.reason, "already_answered");
+          const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+          assert.equal(yield* service.consume({ ref, projectId }), VAULT_VALUE);
+          assert.equal((yield* vault.get(entryId)).lastUse?.accountId, "user-bob");
+        }),
+      { vault: approvalFor(entryId), actingAccountId: "user-bob" },
+    );
+  }),
+);
+
+it.effect("a denied approval stores nothing, and a plain card is not an approval", () =>
+  Effect.gen(function* () {
+    const entryId = VaultEntryId.make("entry-approval");
+    yield* withService(
+      ({ service, stored, dispatched }) =>
+        Effect.gen(function* () {
+          seedEntry(stored, entryId);
+          yield* service.answerVaultApproval({ threadId, turnItemId, decision: "deny" });
+          assert.include(dispatched[0] as object, { secretStatus: "declined" });
+          assert.deepEqual((dispatched[0] as { vault?: unknown }).vault, approvalFor(entryId));
+          assert.isTrue(Option.isNone(yield* service.savedRef({ threadId, turnItemId })));
+          assert.isFalse(leaks(Array.from(stored.keys())));
+        }),
+      { vault: approvalFor(entryId), actingAccountId: "user-bob" },
+    );
+    yield* withService(({ service }) =>
+      Effect.gen(function* () {
+        const refused = yield* service
+          .answerVaultApproval({ threadId, turnItemId, decision: "allow" })
+          .pipe(Effect.flip);
+        assert.equal(refused.reason, "not_found");
+      }),
+    );
+  }),
 );

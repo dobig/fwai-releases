@@ -64,6 +64,32 @@ describe("RPC authorization scopes", () => {
     }
   });
 
+  it("lets vault reads use the read scope and keeps vault writes behind settings write", () => {
+    for (const method of [
+      WS_METHODS.vaultList,
+      WS_METHODS.vaultMatchesForRequest,
+      WS_METHODS.vaultSyncStatus,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationReadScope);
+    }
+    for (const method of [
+      WS_METHODS.vaultCreate,
+      WS_METHODS.vaultUpdate,
+      WS_METHODS.vaultDelete,
+      WS_METHODS.vaultUsePreviousVersion,
+      WS_METHODS.vaultSyncJoin,
+      WS_METHODS.vaultSyncLeave,
+      WS_METHODS.vaultSyncTurnOff,
+      WS_METHODS.vaultSyncRotate,
+      WS_METHODS.vaultSyncRevoke,
+    ]) {
+      expect(requiredScopeForRpcMethod(method)).toBe(AuthSettingsWriteScope);
+    }
+    expect(requiredScopeForRpcMethod(WS_METHODS.secretsAnswerVaultApproval)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+  });
+
   it("rejects unknown RPC method names", () => {
     for (const method of ["server.notRegistered", "toString", "constructor"]) {
       expect(() => requiredScopeForRpcMethod(method)).toThrow(

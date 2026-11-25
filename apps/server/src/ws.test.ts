@@ -81,6 +81,9 @@ import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as LinkService from "./link/LinkService.ts";
 import * as PersonalAgentService from "./personalAgent/PersonalAgentService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
+import * as VaultService from "./vault/VaultService.ts";
+import * as VaultEntrySync from "./vault/sync/VaultEntrySync.ts";
+import * as VaultSyncKeys from "./vault/sync/VaultSyncKeys.ts";
 import * as GuestShareService from "./guest/GuestShareService.ts";
 import * as ThreadShareService from "./threadShare/ThreadShareService.ts";
 import * as ThreadAccessPolicy from "./threadShare/ThreadAccessPolicy.ts";
@@ -452,6 +455,9 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(LinkService.LinkService)({}),
   Layer.mock(PersonalAgentService.PersonalAgentService)({ isRequestThread: () => false }),
   Layer.mock(SecretRequests.SecretRequests)({}),
+  Layer.mock(VaultService.VaultService)({}),
+  Layer.mock(VaultSyncKeys.VaultSyncKeys)({}),
+  Layer.mock(VaultEntrySync.VaultEntrySync)({}),
   Layer.mock(GuestShareService.GuestShareService)({}),
   Layer.mock(ThreadShareService.ThreadShareService)({}),
   Layer.mock(ThreadAccessPolicy.ThreadAccessPolicy)({

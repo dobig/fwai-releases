@@ -7,6 +7,7 @@ import {
 } from "playwright-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
 
+import * as Domains from "../vault/domains.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
 
 describe("server browser element refs", () => {
@@ -386,5 +387,93 @@ describe("server browser drag", () => {
     } finally {
       process.off("unhandledRejection", onUnhandled);
     }
+  });
+});
+
+describe("server browser vault secret typing", () => {
+  const SECRET = "hunter2-vault-value";
+  let browser: Browser;
+  let context: BrowserContext;
+  let page: Page;
+
+  beforeAll(async () => {
+    browser = await chromium.launch({ headless: true });
+  });
+  afterAll(async () => {
+    await browser?.close();
+  });
+  beforeEach(async () => {
+    context = await browser.newContext();
+    await context.route("**/*", (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body:
+          new URL(route.request().url()).pathname === "/framed"
+            ? '<iframe src="https://evil.test/login"></iframe>'
+            : '<input aria-label="password" type="password">',
+      }),
+    );
+    page = await context.newPage();
+  });
+  afterEach(async () => {
+    await context.close();
+  });
+
+  const typeSecret = (
+    domains: ReadonlyArray<string>,
+    options: { readonly selector?: string; readonly onRead?: () => Promise<unknown> } = {},
+  ) =>
+    ServerBrowserPage.typeSecret(
+      page,
+      { selector: options.selector ?? "input", clear: true, timeoutMs: 2_000 },
+      {
+        value: async () => {
+          await options.onRead?.();
+          return SECRET;
+        },
+        originAllowed: async (url) => Domains.originAllowed(domains, url),
+      },
+    );
+  const domainMismatch = { tag: "PreviewAutomationVaultFillError", detail: "domain_mismatch" };
+
+  it.each([
+    { url: "https://example.com/login", domains: ["example.com"] },
+    { url: "https://login.example.com/", domains: ["example.com"] },
+    { url: "http://localhost:3000/", domains: ["localhost"] },
+  ])("types into $url for $domains", async ({ url, domains }) => {
+    await page.goto(url);
+    await typeSecret(domains);
+    expect(await page.locator("input").inputValue()).toBe(SECRET);
+  });
+
+  it.each([
+    { url: "https://evil.test/", domains: ["example.com"] },
+    { url: "https://bob.github.io/", domains: ["alice.github.io"] },
+    { url: "http://login.example.test/", domains: ["example.test"] },
+    { url: "https://example.com/", domains: [] },
+  ])("refuses $url for $domains and types nothing", async ({ url, domains }) => {
+    await page.goto(url);
+    expect(page.url()).toBe(url);
+    await expect(typeSecret(domains)).rejects.toMatchObject(domainMismatch);
+    expect(await page.locator("input").inputValue()).toBe("");
+  });
+
+  it("refuses when the page navigates away before typing", async () => {
+    await page.goto("https://example.com/login");
+    await expect(
+      typeSecret(["example.com"], { onRead: () => page.goto("https://evil.test/login") }),
+    ).rejects.toMatchObject(domainMismatch);
+    expect(page.url()).toBe("https://evil.test/login");
+    expect(await page.locator("input").inputValue()).toBe("");
+  });
+
+  it("checks the frame that holds the field, not the top page", async () => {
+    await page.goto("https://example.com/framed");
+    const field = page.frameLocator("iframe").locator("input");
+    await field.waitFor();
+    await expect(
+      typeSecret(["example.com"], { selector: "iframe >> internal:control=enter-frame >> input" }),
+    ).rejects.toMatchObject(domainMismatch);
+    expect(await field.inputValue()).toBe("");
   });
 });

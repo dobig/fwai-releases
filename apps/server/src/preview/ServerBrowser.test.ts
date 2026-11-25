@@ -12,6 +12,7 @@ import {
   PreviewTabId,
   ProviderInstanceId,
   ThreadId,
+  VaultEntryId,
   type PreviewAutomationSnapshot,
   type PreviewAutomationStatus,
 } from "@t3tools/contracts";
@@ -35,6 +36,7 @@ import * as Manager from "./Manager.ts";
 import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
+import * as VaultService from "../vault/VaultService.ts";
 
 vi.mock("./ServerBrowserContexts.ts", () => ({
   presentAsChrome: async () => {},
@@ -279,6 +281,7 @@ const desktopRenders = (tabId: string) => {
 };
 const releasedDesktopTabs: Array<string> = [];
 const desktopTurns = new NodeEvents.EventEmitter();
+const vaultReads: Array<string> = [];
 const desktopConnections: Array<{ endpoint: string; context: ReturnType<typeof makeContext> }> = [];
 const testThread = {
   threadId: ThreadId.make("browser-test-thread"),
@@ -342,6 +345,10 @@ const dependencies = Layer.mergeAll(
     turn: (threadId, active) => Effect.sync(() => desktopTurns.emit("turn", threadId, active)),
   }),
   PreviewAgentActivity.layer,
+  Layer.mock(VaultService.VaultService)({
+    readValue: () => Effect.sync(() => vaultReads.push("read")).pipe(Effect.as("vault-value")),
+    originAllowed: () => Effect.succeed(true),
+  }),
 ).pipe(
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-server-browser-" })),
   Layer.provideMerge(NodeServices.layer),
@@ -382,6 +389,7 @@ beforeEach(() => {
   desktopRendersNext = false;
   releasedDesktopTabs.length = 0;
   desktopConnections.length = 0;
+  vaultReads.length = 0;
 });
 
 it.live("tells the desktop once per thread when its agent turns start and end", () =>
@@ -471,6 +479,48 @@ it.live.each(["desktop" as const, undefined])(
         expect(reused.tabId).toBe(tabId);
       }),
     ).pipe(Effect.provide(layer)),
+);
+
+it.live("refuses a vault secret for a desktop tab on another machine without reading it", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker } = yield* ready;
+      const manager = yield* Manager.PreviewManager;
+      const desktop = yield* manager.open({
+        threadId: scope.thread.threadId,
+        url: "https://example.com/login",
+        runtime: "desktop",
+      });
+      const error = yield* broker
+        .invoke<object>({
+          scope,
+          tabId: PreviewTabId.make(desktop.tabId),
+          operation: "typeVaultSecret",
+          input: { entryId: VaultEntryId.make("entry-1"), selector: "input" },
+        })
+        .pipe(Effect.flip);
+      expect(error).toMatchObject({
+        _tag: "PreviewAutomationVaultFillError",
+        reason: "vault_unavailable_on_host",
+      });
+      expect(vaultReads).toEqual([]);
+    }),
+  ).pipe(
+    Effect.provide(
+      ServerBrowser.layer.pipe(
+        Layer.provide(
+          Layer.mock(DesktopChannel.DesktopBrowserChannel)({
+            available: false,
+            awaitAttached: () => Effect.succeed(false),
+            detached: Stream.empty,
+            attached: Stream.empty,
+            turn: () => Effect.void,
+          }),
+        ),
+        Layer.provideMerge(dependencies),
+      ),
+    ),
+  ),
 );
 
 it.live.each([

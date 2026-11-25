@@ -1604,11 +1604,69 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:personal-agent:ask",
       tag: WS_METHODS.personalAgentAsk,
     }),
+    // fwai vault: reads are guarded, so the list is a command too.
+    listVault: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:vault:list",
+      tag: WS_METHODS.vaultList,
+    }),
+    createVaultEntry: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:vault:create",
+      tag: WS_METHODS.vaultCreate,
+    }),
+    updateVaultEntry: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:vault:update",
+      tag: WS_METHODS.vaultUpdate,
+    }),
+    deleteVaultEntry: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:vault:delete",
+      tag: WS_METHODS.vaultDelete,
+    }),
+    vaultMatchesForRequest: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:vault:matches-for-request",
+      tag: WS_METHODS.vaultMatchesForRequest,
+    }),
+    restoreVaultPreviousVersion: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:vault:use-previous-version",
+      tag: WS_METHODS.vaultUsePreviousVersion,
+    }),
+    vaultSyncStatus: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:vault:sync-status",
+      tag: WS_METHODS.vaultSyncStatus,
+    }),
+    joinVaultSync: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:vault:sync-join",
+      tag: WS_METHODS.vaultSyncJoin,
+    }),
+    leaveVaultSync: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:vault:sync-leave",
+      tag: WS_METHODS.vaultSyncLeave,
+    }),
+    turnOffVaultSync: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:vault:sync-turn-off",
+      tag: WS_METHODS.vaultSyncTurnOff,
+    }),
+    rotateVaultSyncKey: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:vault:sync-rotate",
+      tag: WS_METHODS.vaultSyncRotate,
+    }),
+    revokeVaultSyncEnvironment: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:vault:sync-revoke",
+      tag: WS_METHODS.vaultSyncRevoke,
+    }),
     // Off the config lane: answering a card must not queue behind settings
     // edits. One answer per card at a time.
     answerSecretRequest: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:secrets:answer-request",
       tag: WS_METHODS.secretsAnswerRequest,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.threadId, input.turnItemId]),
+      },
+    }),
+    answerVaultApproval: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:secrets:answer-vault-approval",
+      tag: WS_METHODS.secretsAnswerVaultApproval,
       concurrency: {
         mode: "singleFlight",
         key: ({ environmentId, input }) =>

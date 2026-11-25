@@ -1,17 +1,37 @@
 import * as Schema from "effect/Schema";
 
 import { ThreadId, TrimmedNonEmptyString, TurnItemId } from "./baseSchemas.ts";
+import { VaultEntryId, VaultSaveFromRequest } from "./vault.ts";
 
 /** Server stores the value under a one-use SecretRef; the thread learns only status. */
 export const SecretRequestAnswerInput = Schema.Struct({
   threadId: ThreadId,
   turnItemId: TurnItemId,
   answer: Schema.Union([
-    Schema.Struct({ type: Schema.Literal("save"), secret: TrimmedNonEmptyString }),
+    Schema.Struct({
+      type: Schema.Literal("save"),
+      secret: TrimmedNonEmptyString,
+      /** fwai: also keep the typed value as a vault entry. */
+      saveToVault: Schema.optional(VaultSaveFromRequest),
+    }),
+    /** fwai: answer with a vault entry; `alsoAllowProject` adds this project to its scope. */
+    Schema.Struct({
+      type: Schema.Literal("vault"),
+      entryId: VaultEntryId,
+      alsoAllowProject: Schema.optional(Schema.Boolean),
+    }),
     Schema.Struct({ type: Schema.Literal("decline") }),
   ]),
 });
 export type SecretRequestAnswerInput = typeof SecretRequestAnswerInput.Type;
+
+/** fwai: the owner allows or denies one use of a vault entry by another account's run. */
+export const SecretVaultApprovalInput = Schema.Struct({
+  threadId: ThreadId,
+  turnItemId: TurnItemId,
+  decision: Schema.Literals(["allow", "deny"]),
+});
+export type SecretVaultApprovalInput = typeof SecretVaultApprovalInput.Type;
 
 const SECRET_REQUEST_FAILURE_MESSAGES = {
   load_failed: "Could not load the secret request.",
@@ -26,6 +46,9 @@ const SECRET_REQUEST_FAILURE_MESSAGES = {
     "That secretRef was already used or does not exist. Ask the user again with request_secret.",
   ref_expired: "That secretRef expired. Ask the user again with request_secret.",
   consume_failed: "Could not use that secretRef. Try again.",
+  vault_entry_unavailable: "That vault entry no longer exists or is not available here.",
+  vault_save_failed: "Could not save the secret to the vault.",
+  vault_name_taken: "Another vault entry visible to this project already has that name.",
   not_a_file_request:
     'The user did not save this secret for shell use. Ask again with request_secret and delivery: "file".',
 } as const;

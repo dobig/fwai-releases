@@ -15,6 +15,7 @@ import {
   type PreviewAutomationSelectResult,
   type PreviewAutomationSnapshot,
   type PreviewAutomationTypeInput,
+  type PreviewAutomationTypeVaultSecretInput,
   type PreviewAutomationUploadInput,
   type PreviewAutomationWaitForInput,
 } from "@t3tools/contracts";
@@ -653,12 +654,14 @@ export const click = async (
   return point;
 };
 
-export const type = async (page: Page, input: PreviewAutomationTypeInput) => {
+type TypeTarget = Omit<PreviewAutomationTypeVaultSecretInput, "entryId" | "tabId">;
+
+/** Checks the target can take text; `insert` then types into it. */
+const prepareTyping = async (page: Page, input: TypeTarget) => {
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const locator = targetLocator(page, input);
   if (locator !== null && input.clear) {
-    await locator.fill(input.text, { timeout });
-    return;
+    return { target: locator, insert: (text: string) => locator.fill(text, { timeout }) };
   }
   // A shadow host also matches :focus; use its innermost focused descendant.
   const target = locator ?? page.locator("*:focus").last();
@@ -706,11 +709,57 @@ export const type = async (page: Page, input: PreviewAutomationTypeInput) => {
       "The target is not an enabled text field, so no text was typed.",
     );
   }
-  if (input.clear) {
-    await page.keyboard.press("ControlOrMeta+A");
-    await page.keyboard.press("Delete");
-  }
-  await page.keyboard.insertText(input.text);
+  return {
+    target,
+    insert: async (text: string) => {
+      if (input.clear) {
+        await page.keyboard.press("ControlOrMeta+A");
+        await page.keyboard.press("Delete");
+      }
+      await page.keyboard.insertText(text);
+    },
+  };
+};
+
+export const type = async (page: Page, input: PreviewAutomationTypeInput) => {
+  await (await prepareTyping(page, input)).insert(input.text ?? "");
+};
+
+const domainMismatch = () =>
+  new ServerBrowserOperationError(
+    "PreviewAutomationVaultFillError",
+    "That secret may not be typed into this page.",
+    "domain_mismatch",
+  );
+
+/**
+ * Types a vault value only if the field's own frame is on an allowed origin, checked after the
+ * value is read and again just before typing so a navigation in between refuses.
+ */
+export const typeSecret = async (
+  page: Page,
+  input: TypeTarget,
+  secret: {
+    readonly value: () => Promise<string>;
+    readonly originAllowed: (url: string) => Promise<boolean>;
+  },
+) => {
+  const value = await secret.value();
+  const typing = await prepareTyping(page, input);
+  const frameUrl = () =>
+    typing.target.evaluate((element) => element.ownerDocument.URL, undefined, {
+      timeout: input.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    });
+  const url = await frameUrl();
+  if (!(await secret.originAllowed(url))) throw domainMismatch();
+  if ((await frameUrl()) !== url) throw domainMismatch();
+  // Playwright errors can echo call arguments; report none of this one's.
+  await typing.insert(value).catch(() => {
+    throw new ServerBrowserOperationError(
+      "PreviewAutomationExecutionError",
+      "The secret could not be typed into this field.",
+    );
+  });
 };
 
 export const hover = async (

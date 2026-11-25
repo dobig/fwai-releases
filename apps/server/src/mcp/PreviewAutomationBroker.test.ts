@@ -1031,3 +1031,71 @@ it.effect("keeps each thread's current tab when threads share a provider session
     }),
   ),
 );
+
+it.effect("refuses a vault secret on a host that does not advertise typing one", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const routed: Array<RoutedRequest> = [];
+      const requests = requestsFrom(
+        yield* broker.connect(makeHost({ supportedOperations: ["status", "type"] })),
+      );
+      yield* Stream.runForEach(requests, (request) => {
+        routed.push(request);
+        return broker.respond({
+          clientId: "client-1",
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: true,
+          result: {},
+        });
+      }).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+      yield* broker.invoke({ scope, operation: "status", input: {} });
+
+      const error = yield* broker
+        .invoke<object>({ scope, operation: "typeVaultSecret", input: { entryId: "entry-1" } })
+        .pipe(Effect.flip);
+
+      expect(error).toMatchObject({
+        _tag: "PreviewAutomationVaultFillError",
+        reason: "vault_unavailable_on_host",
+      });
+      expect(routed.map((request) => request.operation)).toEqual(["status"]);
+    }),
+  ),
+);
+
+it.effect("reports a host's vault fill refusal by its reason", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const requests = requestsFrom(
+        yield* broker.connect(makeHost({ supportedOperations: ["typeVaultSecret"] })),
+      );
+      yield* Stream.runForEach(requests, (request) =>
+        broker.respond({
+          clientId: "client-1",
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: false,
+          error: {
+            _tag: "PreviewAutomationVaultFillError",
+            message: "That secret may not be typed into this page.",
+            detail: "domain_mismatch",
+          },
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Effect.yieldNow;
+
+      const error = yield* broker
+        .invoke<object>({ scope, operation: "typeVaultSecret", input: { entryId: "entry-1" } })
+        .pipe(Effect.flip);
+
+      expect(error).toMatchObject({
+        _tag: "PreviewAutomationVaultFillError",
+        reason: "domain_mismatch",
+      });
+    }),
+  ),
+);

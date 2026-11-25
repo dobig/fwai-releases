@@ -74,7 +74,8 @@ const makeProjection = (overrides: ThreadFixture = {}): OrchestrationV2ThreadPro
       deletedAt: null,
       ...overrides,
     },
-  }) as OrchestrationV2ThreadProjection;
+    runs: [],
+  }) as unknown as OrchestrationV2ThreadProjection;
 
 const project: Project = {
   id: projectId,

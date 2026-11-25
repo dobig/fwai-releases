@@ -200,7 +200,7 @@ const seedThread = (name: string, title: string) =>
     return threadId;
   });
 
-const sendUserMessage = (threadId: ThreadId, key: string, text: string) =>
+const sendUserMessage = (threadId: ThreadId, key: string, text: string, actingAccountId?: string) =>
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     yield* orchestrator.dispatch({
@@ -208,6 +208,7 @@ const sendUserMessage = (threadId: ThreadId, key: string, text: string) =>
       createdBy: "user",
       creationSource: "web",
       commandId: CommandId.make(`command:message:${key}`),
+      ...(actingAccountId === undefined ? {} : { actingAccountId }),
       threadId,
       messageId: MessageId.make(`message:${key}`),
       text,
@@ -333,6 +334,7 @@ it.layer(Layer.merge(layerTest, ProviderContinuationRequests.layer))("link group
         purpose: "owns fwai_code",
       });
       assert.deepEqual(peerRun.linkTask?.requester, { environmentId, threadId: fwai });
+      assert.isUndefined(peerRun.actingAccountId);
       const task = yield* requesterTask(fwai, taskId);
       assert.deepEqual(task.assignee, { environmentId, threadId: gateway });
       assert.equal(task.link?.hop, 1);
@@ -348,6 +350,28 @@ it.layer(Layer.merge(layerTest, ProviderContinuationRequests.layer))("link group
       const wake = yield* requests.take;
       assert.equal(wake.threadId, fwai);
       assert.equal(wake.delegatedCompletion?.parentRunId, requesterRun.id);
+    }),
+  );
+
+  it.effect("runs a task for the account the requesting run acts for", () =>
+    Effect.gen(function* () {
+      const links = yield* LinkService.LinkService;
+      const fwai = yield* seedThread("acting-fwai", "fwai_code");
+      const gateway = yield* seedThread("acting-gateway", "llm_gateway");
+      yield* sendUserMessage(fwai, "acting-start", "Wire it", "gateway-user-1");
+      yield* links.create({
+        name: "Acting",
+        members: [
+          { threadId: fwai, purpose: "owns fwai_code" },
+          { threadId: gateway, purpose: "owns llm_gateway" },
+        ],
+      });
+      const { taskId } = yield* links.assign({
+        callerThreadId: fwai,
+        peerId: linkPeerId(gateway),
+        task: "Add a /v1/scopes endpoint",
+      });
+      assert.equal((yield* linkTaskRun(gateway, taskId)).actingAccountId, "gateway-user-1");
     }),
   );
 
@@ -833,6 +857,8 @@ it.effect("links one account's laptop and server without a share, both ways", ()
         owner: null,
       });
       assert.equal(peerRun.runtimeModeCeiling, "full-access");
+      // The same account's other environment is its owner here.
+      assert.isUndefined(peerRun.actingAccountId);
       const recorded = yield* onLaptop(requesterTask(mine, taskId));
       assert.deepEqual(recorded.assignee, { environmentId: server, threadId: theirs });
       assert.equal(recorded.childThreadId, null);
@@ -917,6 +943,7 @@ it.effect("crosses accounts only through shares, and waits for the owner's appro
       );
       const bobRun = yield* onOffice(linkTaskRun(bobs, taskId));
       assert.equal(bobRun.runtimeModeCeiling, "approval-required");
+      assert.equal(bobRun.actingAccountId, "alice");
 
       yield* onOffice(moveRun(bobRun, "waiting"));
       yield* onOffice(reportRun(bobRun));
@@ -953,6 +980,7 @@ it.effect("crosses accounts only through shares, and waits for the owner's appro
       const aliceRun = yield* onLaptop(linkTaskRun(mine, back.taskId));
       assert.equal(aliceRun.runtimeModeCeiling, "approval-required");
       assert.deepEqual(aliceRun.linkTask?.sender.remote?.accountId, "bob");
+      assert.equal(aliceRun.actingAccountId, "bob");
     }),
   ),
 );

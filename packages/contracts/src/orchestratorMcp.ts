@@ -38,6 +38,7 @@ import {
   OrchestrationV2TurnItemStatus,
 } from "./orchestrationV2.ts";
 import { ProviderOptionSelection, ProviderOptionSelectionValue } from "./model.ts";
+import { VaultDomains, VaultEntryKind, VaultEntryName } from "./vault.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 
 const OrchestratorMcpPrompt = TrimmedNonEmptyString.check(Schema.isMaxLength(120_000));
@@ -642,6 +643,10 @@ export const OrchestratorMcpRequestSecretInput = Schema.Struct({
     description: "What it is for and where to get it.",
   }),
   placeholder: Schema.optional(TrimmedNonEmptyString),
+  name: Schema.optional(VaultEntryName).annotate({
+    description:
+      "A vault entry from secret_list. The owner's runs get it without a card; others wait for the owner to allow it.",
+  }),
   delivery: Schema.optional(Schema.Literals(["secretRef", "file"])).annotate({
     description:
       'secretRef (default) for a fwai tool. file for a shell CLI: read the path in your command, e.g. TOKEN="$(cat <file>)" wrangler whoami.',
@@ -678,6 +683,19 @@ export const OrchestratorMcpRequestSecretResult = Schema.Union([
 ]);
 export type OrchestratorMcpRequestSecretResult = typeof OrchestratorMcpRequestSecretResult.Type;
 
+/** fwai: vault entries the caller's project may use. Never values. */
+export const OrchestratorMcpSecretListResult = Schema.Struct({
+  entries: Schema.Array(
+    Schema.Struct({
+      name: VaultEntryName,
+      kind: VaultEntryKind,
+      username: Schema.optional(TrimmedNonEmptyString),
+      domains: VaultDomains,
+    }),
+  ),
+});
+export type OrchestratorMcpSecretListResult = typeof OrchestratorMcpSecretListResult.Type;
+
 export const OrchestratorMcpDeleteScheduledTaskInput = Schema.Struct({
   scheduledTaskId: ScheduledTaskId,
 });
@@ -711,6 +729,11 @@ export class OrchestratorMcpFailure extends Schema.TaggedError<OrchestratorMcpFa
       "orchestration_error",
       "thread_credential_required",
       "target_required",
+      // fwai: vault tool failures; messages come from VAULT_TOOL_FAILURE_MESSAGES.
+      "not_allowed",
+      "out_of_scope",
+      "ambiguous_name",
+      "approval_denied",
     ]),
     message: Schema.String,
   },

@@ -51,6 +51,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+import * as VaultService from "../vault/VaultService.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 import { idleThreadProjection, liveThreadShell } from "./McpToolAccess.testkit.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
@@ -61,6 +62,7 @@ const decodeTarget = Schema.decodeUnknownEffect(OrchestratorMcpTarget);
 const layerOrchestratorService = OrchestratorMcpService.layer.pipe(
   Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
+  Layer.provide(Layer.mock(VaultService.VaultService)({})),
 );
 
 describe("OrchestratorMcpService", () => {

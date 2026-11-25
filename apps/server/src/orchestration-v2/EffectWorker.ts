@@ -299,6 +299,9 @@ export const layerExecutor: Layer.Layer<
                         ...(message.authorAccountId === undefined
                           ? {}
                           : { authorAccountId: message.authorAccountId }),
+                        ...(run.actingAccountId === undefined
+                          ? {}
+                          : { actingAccountId: run.actingAccountId }),
                       })
                       .pipe(
                         // A disabled instance cannot retry this completed turn; its result stands.

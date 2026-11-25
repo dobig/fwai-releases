@@ -69,6 +69,20 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.personalAgentSetPermissions]: AuthAccessWriteScope,
   [WS_METHODS.personalAgentConfigure]: AuthAccessWriteScope,
   [WS_METHODS.personalAgentAsk]: AuthOrchestrationOperateScope,
+  // fwai: the vault. Reads list names and domains, never values.
+  [WS_METHODS.vaultList]: AuthOrchestrationReadScope,
+  [WS_METHODS.vaultMatchesForRequest]: AuthOrchestrationReadScope,
+  [WS_METHODS.vaultCreate]: AuthSettingsWriteScope,
+  [WS_METHODS.vaultUpdate]: AuthSettingsWriteScope,
+  [WS_METHODS.vaultDelete]: AuthSettingsWriteScope,
+  [WS_METHODS.vaultUsePreviousVersion]: AuthSettingsWriteScope,
+  [WS_METHODS.vaultSyncStatus]: AuthOrchestrationReadScope,
+  [WS_METHODS.vaultSyncJoin]: AuthSettingsWriteScope,
+  [WS_METHODS.vaultSyncLeave]: AuthSettingsWriteScope,
+  [WS_METHODS.vaultSyncTurnOff]: AuthSettingsWriteScope,
+  [WS_METHODS.vaultSyncRotate]: AuthSettingsWriteScope,
+  [WS_METHODS.vaultSyncRevoke]: AuthSettingsWriteScope,
+  [WS_METHODS.secretsAnswerVaultApproval]: AuthOrchestrationOperateScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 

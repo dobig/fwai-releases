@@ -1,9 +1,14 @@
 import type { FwaiAccountSession, FwaiAccountUser } from "@t3tools/client-runtime/account";
+import { VAULT_SYNC_JOIN_CHOICE_LABEL, VAULT_SYNC_NOTICE } from "@t3tools/client-runtime/vault";
 import { type SubmitEvent, useState } from "react";
 
 import { APP_DISPLAY_NAME } from "../branding";
+import { VAULT_JOIN_ON_LINK_STORAGE_KEY, VaultJoinOnLinkSchema } from "../cloud/connectAutoEnable";
 import { Alert, AlertDescription } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
+import { Checkbox } from "../components/ui/checkbox";
+import { isElectron } from "../env";
+import { removeLocalStorageItem, setLocalStorageItem } from "../hooks/useLocalStorage";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { StandalonePage, StandalonePageHeader } from "../components/ui/standalone-page";
@@ -40,10 +45,19 @@ export function FwaiSignInScreen({
 }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [joinSecretSharing, setJoinSecretSharing] = useState(false);
   const [pending, run] = usePending();
 
   const submit = (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
+    // The desktop links its environment after sign-in; ConnectAutoEnableCoordinator applies this.
+    if (isElectron) {
+      if (joinSecretSharing) {
+        setLocalStorageItem(VAULT_JOIN_ON_LINK_STORAGE_KEY, true, VaultJoinOnLinkSchema);
+      } else {
+        removeLocalStorageItem(VAULT_JOIN_ON_LINK_STORAGE_KEY);
+      }
+    }
     run(() => session.signIn({ username, password }));
   };
 
@@ -81,6 +95,19 @@ export function FwaiSignInScreen({
             onChange={(event) => setPassword(event.currentTarget.value)}
           />
         </div>
+        {isElectron ? (
+          <label className="flex cursor-pointer items-start gap-2 text-sm">
+            <Checkbox
+              checked={joinSecretSharing}
+              disabled={pending}
+              onCheckedChange={(checked) => setJoinSecretSharing(checked === true)}
+            />
+            <span className="flex flex-col gap-1">
+              <span>{VAULT_SYNC_JOIN_CHOICE_LABEL}</span>
+              <span className="text-xs text-muted-foreground">{VAULT_SYNC_NOTICE}</span>
+            </span>
+          </label>
+        ) : null}
         <ErrorAlert message={error} />
         <Button type="submit" disabled={pending || username.trim() === "" || password === ""}>
           {pending ? "Signing in..." : "Sign in"}

@@ -5,15 +5,23 @@ import {
   CommandId,
   SecretRef,
   SecretRequestError,
+  VaultEntryId,
+  type NodeId,
+  type OrchestrationV2SecretRequestVault,
+  type OrchestrationV2TurnItem,
   type ProjectId,
+  type RunId,
   type SecretRequestAnswerInput,
+  type SecretVaultApprovalInput,
   type ThreadId,
+  type TurnItemId,
 } from "@t3tools/contracts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto has no createHmac.
 import * as NodeCrypto from "node:crypto";
 
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -26,6 +34,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as Metrics from "../observability/Metrics.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import * as VaultService from "../vault/VaultService.ts";
 
 const SECRET_REF_PREFIX = "secret-ref:";
 const storeName = (ref: SecretRef) => `secret-request-${ref.slice(SECRET_REF_PREFIX.length)}`;
@@ -43,7 +52,13 @@ const refFor = (salt: string, threadId: ThreadId, turnItemId: string) =>
   );
 
 const StoredSecret = Schema.fromJsonString(
-  Schema.Struct({ projectId: Schema.String, value: Schema.String, savedAt: Schema.Number }),
+  Schema.Struct({
+    projectId: Schema.String,
+    value: Schema.String,
+    savedAt: Schema.Number,
+    /** fwai: the vault entry the value came from; only these may fill a page. */
+    entryId: Schema.optional(VaultEntryId),
+  }),
 );
 const encodeStored = Schema.encodeEffect(StoredSecret);
 const decodeStored = Schema.decodeUnknownOption(StoredSecret);
@@ -52,6 +67,26 @@ export class SecretRequests extends Context.Service<
   SecretRequests,
   {
     readonly answer: (input: SecretRequestAnswerInput) => Effect.Effect<void, SecretRequestError>;
+    /** fwai: the owner allows or denies another account's run one use of an entry. */
+    readonly answerVaultApproval: (
+      input: SecretVaultApprovalInput,
+    ) => Effect.Effect<void, SecretRequestError>;
+    /**
+     * fwai: an owner's run uses an in-scope entry with no card. Stores it under the
+     * request's ref, as a saved answer would be, and records "Used <name>" and the use.
+     */
+    readonly useVaultEntry: (input: {
+      readonly threadId: ThreadId;
+      readonly runId: RunId;
+      readonly nodeId: NodeId;
+      readonly turnItemId: TurnItemId;
+      readonly projectId: ProjectId;
+      readonly entry: { readonly id: VaultEntryId; readonly name: string };
+      readonly label: string;
+      readonly reason: string;
+      readonly placeholder?: string;
+      readonly delivery?: "file";
+    }) => Effect.Effect<void, SecretRequestError>;
     readonly savedRef: (input: {
       readonly threadId: ThreadId;
       readonly turnItemId: string;
@@ -60,6 +95,14 @@ export class SecretRequests extends Context.Service<
       readonly ref: SecretRef;
       readonly projectId: ProjectId;
     }) => Effect.Effect<string, SecretRequestError>;
+    /**
+     * Uses a vault-backed ref for a form fill and returns its entry. A ref without one is left
+     * unused and yields undefined.
+     */
+    readonly consumeForFill: (input: {
+      readonly ref: SecretRef;
+      readonly projectId: ProjectId;
+    }) => Effect.Effect<VaultEntryId | undefined, SecretRequestError>;
     /** Moves a saved `file` request's value to an owner-only file and returns its path. */
     readonly saveToFile: (input: {
       readonly threadId: ThreadId;
@@ -73,6 +116,7 @@ const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
+  const vault = yield* VaultService.VaultService;
   // Beside the store's own files so the same owner-only directory and cleanup rules apply.
   const filesDir = store.directory === undefined ? undefined : path.join(store.directory, "files");
 
@@ -80,90 +124,288 @@ const make = Effect.gen(function* () {
     yield* store.getOrCreateRandom("secret-request-salt", 32).pipe(Effect.orDie),
   ).toString("hex");
 
+  const storeNameFor = (threadId: ThreadId, turnItemId: string) =>
+    storeName(refFor(salt, threadId, turnItemId));
+
+  // Create, never overwrite, so racing answers cannot replace a value or show saved before storage.
+  // An existing value on a pending card finishes an earlier save whose recording failed.
+  const storeValue = Effect.fnUntraced(function* (
+    name: string,
+    record: {
+      readonly projectId: ProjectId;
+      readonly value: string;
+      readonly entryId?: VaultEntryId;
+    },
+  ) {
+    const encoded = yield* encodeStored({
+      ...record,
+      savedAt: yield* Clock.currentTimeMillis,
+    }).pipe(Effect.orDie);
+    yield* store.create(name, new TextEncoder().encode(encoded)).pipe(
+      Effect.catchIf(ServerSecretStore.isSecretAlreadyExistsError, () => Effect.void),
+      Effect.mapError((error) => new SecretRequestError({ reason: "store_failed", cause: error })),
+    );
+  });
+
+  const storeFromVault = Effect.fnUntraced(function* (
+    name: string,
+    input: { readonly projectId: ProjectId; readonly entryId: VaultEntryId },
+  ) {
+    const value = yield* vault
+      .readValue(input.entryId)
+      .pipe(Effect.mapError(() => new SecretRequestError({ reason: "vault_entry_unavailable" })));
+    yield* storeValue(name, { projectId: input.projectId, value, entryId: input.entryId });
+  });
+
+  const assertEntryInScope = Effect.fnUntraced(function* (
+    entryId: VaultEntryId,
+    projectId: ProjectId,
+  ) {
+    const entry = yield* vault
+      .get(entryId)
+      .pipe(Effect.mapError(() => new SecretRequestError({ reason: "vault_entry_unavailable" })));
+    if (entry.scope !== "global" && !entry.scope.projects.includes(projectId)) {
+      return yield* new SecretRequestError({ reason: "vault_entry_unavailable" });
+    }
+  });
+
+  // Usage is bookkeeping: a failed write must not take back a value already handed over.
+  const recordVaultUse = (
+    entryId: VaultEntryId,
+    usage: {
+      readonly threadId: ThreadId;
+      readonly accountId: string | undefined;
+      readonly delivery: "file" | undefined;
+    },
+  ) =>
+    DateTime.now.pipe(
+      Effect.flatMap((now) =>
+        vault.recordUse(entryId, {
+          at: DateTime.formatIso(now),
+          threadId: usage.threadId,
+          ...(usage.accountId === undefined ? {} : { accountId: usage.accountId }),
+          delivery: usage.delivery === "file" ? "file" : "secretRef",
+        }),
+      ),
+      Effect.catch((error) =>
+        Effect.logWarning("Could not record a vault entry use", { reason: error.reason }),
+      ),
+    );
+
+  const loadPending = Effect.fnUntraced(function* (threadId: ThreadId, turnItemId: string) {
+    const records = yield* threadManagement
+      .getThreadRecords(threadId, ["runs", "turnItems"], {
+        turnItemTypes: ["secret_request"],
+        messageRoles: [],
+      })
+      .pipe(Effect.mapError((cause) => new SecretRequestError({ reason: "load_failed", cause })));
+    const item = records.turnItems.find((candidate) => candidate.id === turnItemId);
+    if (item?.type !== "secret_request" || item.runId === null || item.nodeId === null) {
+      return yield* new SecretRequestError({ reason: "not_found" });
+    }
+    if (item.secretStatus !== "pending") {
+      return yield* new SecretRequestError({ reason: "already_answered" });
+    }
+    const run = records.runs.find((candidate) => candidate.id === item.runId);
+    if (run === undefined || ThreadManagementService.isTerminalRunStatus(run.status)) {
+      return yield* new SecretRequestError({ reason: "agent_stopped" });
+    }
+    return {
+      item,
+      run,
+      runId: item.runId,
+      nodeId: item.nodeId,
+      projectId: records.thread.projectId,
+    };
+  });
+
+  type SecretRequestItem = Extract<OrchestrationV2TurnItem, { readonly type: "secret_request" }>;
+
+  /**
+   * Records the card's new status, then makes sure it stuck: the wait may have closed the card,
+   * and no one receives the ref of an unrecorded answer, so its value is deleted.
+   */
+  const recordStatus = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly runId: RunId;
+    readonly nodeId: NodeId;
+    readonly item: Pick<
+      SecretRequestItem,
+      "id" | "label" | "reason" | "placeholder" | "delivery" | "vault"
+    >;
+    readonly secretStatus: "saved" | "declined";
+    readonly vault?: OrchestrationV2SecretRequestVault;
+  }) {
+    const { item } = input;
+    const name = storeNameFor(input.threadId, item.id);
+    const vaultRecord = input.vault ?? item.vault;
+    yield* threadManagement
+      .dispatch({
+        type: "secret_request.record",
+        commandId: CommandId.make(`secret-request:${item.id}:${input.secretStatus}`),
+        threadId: input.threadId,
+        runId: input.runId,
+        nodeId: input.nodeId,
+        turnItemId: item.id,
+        label: item.label,
+        reason: item.reason,
+        ...(item.placeholder === undefined ? {} : { placeholder: item.placeholder }),
+        ...(item.delivery === undefined ? {} : { delivery: item.delivery }),
+        secretStatus: input.secretStatus,
+        ...(vaultRecord === undefined ? {} : { vault: vaultRecord }),
+      })
+      .pipe(
+        Effect.mapError((cause) => new SecretRequestError({ reason: "record_failed", cause })),
+        // Clear failed saves so the pending card can be answered again.
+        Effect.tapError(() => (input.secretStatus === "saved" ? removeLogged(name) : Effect.void)),
+      );
+    if (input.secretStatus !== "saved") return;
+    const recorded = yield* threadManagement
+      .getThreadRecords(input.threadId, ["turnItems"], {
+        turnItemTypes: ["secret_request"],
+        messageRoles: [],
+      })
+      .pipe(Effect.mapError((cause) => new SecretRequestError({ reason: "record_failed", cause })));
+    const card = recorded.turnItems.find((candidate) => candidate.id === item.id);
+    if (card?.type === "secret_request" && card.secretStatus !== "saved") {
+      yield* removeLogged(name);
+      return yield* new SecretRequestError({ reason: "agent_stopped" });
+    }
+  });
+
   const answer: SecretRequests["Service"]["answer"] = Effect.fn("SecretRequests.answer")(
     function* (input) {
       yield* Effect.annotateCurrentSpan({
         "orchestration_v2.thread_id": input.threadId,
         "secret_request.answer": input.answer.type,
       });
-      const records = yield* threadManagement
-        .getThreadRecords(input.threadId, ["runs", "turnItems"], {
-          turnItemTypes: ["secret_request"],
-          messageRoles: [],
-        })
-        .pipe(Effect.mapError((cause) => new SecretRequestError({ reason: "load_failed", cause })));
-      const item = records.turnItems.find((candidate) => candidate.id === input.turnItemId);
-      if (item?.type !== "secret_request" || item.runId === null || item.nodeId === null) {
-        return yield* new SecretRequestError({ reason: "not_found" });
-      }
-      if (item.secretStatus !== "pending") {
-        return yield* new SecretRequestError({ reason: "already_answered" });
-      }
-      const run = records.runs.find((candidate) => candidate.id === item.runId);
-      if (run === undefined || ThreadManagementService.isTerminalRunStatus(run.status)) {
-        return yield* new SecretRequestError({ reason: "agent_stopped" });
-      }
-      // Create before recording so racing answers cannot overwrite values or show saved before storage.
-      // Existing values on pending cards finish earlier saves whose recording failed.
-      if (input.answer.type === "save") {
-        const encoded = yield* encodeStored({
-          projectId: records.thread.projectId,
-          value: input.answer.secret,
-          savedAt: yield* Clock.currentTimeMillis,
-        }).pipe(Effect.orDie);
-        yield* store
-          .create(
-            storeName(refFor(salt, input.threadId, item.id)),
-            new TextEncoder().encode(encoded),
-          )
-          .pipe(
-            Effect.catchIf(ServerSecretStore.isSecretAlreadyExistsError, () => Effect.void),
-            Effect.mapError(
-              (error) => new SecretRequestError({ reason: "store_failed", cause: error }),
+      const pending = yield* loadPending(input.threadId, input.turnItemId);
+      const { item, projectId } = pending;
+      // A vault approval is answered with answerVaultApproval, never with a value.
+      if (item.vault !== undefined) return yield* new SecretRequestError({ reason: "not_found" });
+      const name = storeNameFor(input.threadId, item.id);
+      const answer = input.answer;
+      switch (answer.type) {
+        case "decline":
+          return yield* recordStatus({
+            ...pending,
+            threadId: input.threadId,
+            secretStatus: "declined",
+          });
+        case "vault": {
+          if (answer.alsoAllowProject === true) {
+            yield* vault.allowProject({ id: answer.entryId, projectId }).pipe(
+              Effect.mapError(
+                (error) =>
+                  new SecretRequestError({
+                    reason:
+                      error.reason === "not_found" ? "vault_entry_unavailable" : "store_failed",
+                  }),
+              ),
+            );
+          }
+          yield* assertEntryInScope(answer.entryId, projectId);
+          yield* storeFromVault(name, { projectId, entryId: answer.entryId });
+          yield* recordStatus({ ...pending, threadId: input.threadId, secretStatus: "saved" });
+          return yield* recordVaultUse(answer.entryId, {
+            threadId: input.threadId,
+            accountId: pending.run.actingAccountId,
+            delivery: item.delivery,
+          });
+        }
+        case "save": {
+          // The typed answer and its vault copy succeed or fail together: a vault failure leaves
+          // the card pending, and a failed answer removes the entry it created.
+          const saveToVault = answer.saveToVault;
+          const created =
+            saveToVault === undefined
+              ? undefined
+              : yield* vault.create({ ...saveToVault, value: answer.secret }).pipe(
+                  Effect.mapError(
+                    (error) =>
+                      new SecretRequestError({
+                        reason:
+                          error.reason === "name_taken" ? "vault_name_taken" : "vault_save_failed",
+                      }),
+                  ),
+                );
+          return yield* Effect.gen(function* () {
+            yield* storeValue(name, {
+              projectId,
+              value: answer.secret,
+              ...(created === undefined ? {} : { entryId: created.id }),
+            });
+            yield* recordStatus({ ...pending, threadId: input.threadId, secretStatus: "saved" });
+          }).pipe(
+            Effect.tapError(() =>
+              created === undefined ? Effect.void : vault.delete(created.id).pipe(Effect.ignore),
             ),
           );
-      }
-      const secretStatus = input.answer.type === "save" ? "saved" : "declined";
-      yield* threadManagement
-        .dispatch({
-          type: "secret_request.record",
-          commandId: CommandId.make(`secret-request:${item.id}:${secretStatus}`),
-          threadId: input.threadId,
-          runId: item.runId,
-          nodeId: item.nodeId,
-          turnItemId: item.id,
-          label: item.label,
-          reason: item.reason,
-          ...(item.placeholder === undefined ? {} : { placeholder: item.placeholder }),
-          ...(item.delivery === undefined ? {} : { delivery: item.delivery }),
-          secretStatus,
-        })
-        .pipe(
-          Effect.mapError((cause) => new SecretRequestError({ reason: "record_failed", cause })),
-          // Clear failed saves so the pending card can be answered again.
-          Effect.tapError(() =>
-            input.answer.type === "save"
-              ? removeLogged(storeName(refFor(salt, input.threadId, item.id)))
-              : Effect.void,
-          ),
-        );
-      if (input.answer.type !== "save") return;
-      // The wait may have closed the card; delete unrecorded answers because no one receives their refs.
-      const recorded = yield* threadManagement
-        .getThreadRecords(input.threadId, ["turnItems"], {
-          turnItemTypes: ["secret_request"],
-          messageRoles: [],
-        })
-        .pipe(
-          Effect.mapError((cause) => new SecretRequestError({ reason: "record_failed", cause })),
-        );
-      const card = recorded.turnItems.find((candidate) => candidate.id === item.id);
-      if (card?.type === "secret_request" && card.secretStatus !== "saved") {
-        yield* removeLogged(storeName(refFor(salt, input.threadId, item.id)));
-        return yield* new SecretRequestError({ reason: "agent_stopped" });
+        }
       }
     },
   );
+
+  const answerVaultApproval: SecretRequests["Service"]["answerVaultApproval"] = Effect.fn(
+    "SecretRequests.answerVaultApproval",
+  )(function* (input) {
+    yield* Effect.annotateCurrentSpan({
+      "orchestration_v2.thread_id": input.threadId,
+      "secret_request.decision": input.decision,
+    });
+    const pending = yield* loadPending(input.threadId, input.turnItemId);
+    const approval = pending.item.vault;
+    if (approval?.requestedByAccountId === undefined) {
+      return yield* new SecretRequestError({ reason: "not_found" });
+    }
+    if (input.decision === "deny") {
+      return yield* recordStatus({
+        ...pending,
+        threadId: input.threadId,
+        secretStatus: "declined",
+      });
+    }
+    yield* assertEntryInScope(approval.entryId, pending.projectId);
+    yield* storeFromVault(storeNameFor(input.threadId, pending.item.id), {
+      projectId: pending.projectId,
+      entryId: approval.entryId,
+    });
+    yield* recordStatus({ ...pending, threadId: input.threadId, secretStatus: "saved" });
+    yield* recordVaultUse(approval.entryId, {
+      threadId: input.threadId,
+      accountId: pending.run.actingAccountId,
+      delivery: pending.item.delivery,
+    });
+  });
+
+  const useVaultEntry: SecretRequests["Service"]["useVaultEntry"] = Effect.fn(
+    "SecretRequests.useVaultEntry",
+  )(function* (input) {
+    yield* Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId });
+    yield* storeFromVault(storeNameFor(input.threadId, input.turnItemId), {
+      projectId: input.projectId,
+      entryId: input.entry.id,
+    });
+    yield* recordStatus({
+      threadId: input.threadId,
+      runId: input.runId,
+      nodeId: input.nodeId,
+      item: {
+        id: input.turnItemId,
+        label: input.label,
+        reason: input.reason,
+        ...(input.placeholder === undefined ? {} : { placeholder: input.placeholder }),
+        ...(input.delivery === undefined ? {} : { delivery: input.delivery }),
+      },
+      secretStatus: "saved",
+      vault: { entryId: input.entry.id, entryName: input.entry.name },
+    });
+    yield* recordVaultUse(input.entry.id, {
+      threadId: input.threadId,
+      accountId: undefined,
+      delivery: input.delivery,
+    });
+  });
 
   const savedRef: SecretRequests["Service"]["savedRef"] = Effect.fn("SecretRequests.savedRef")(
     function* (input) {
@@ -195,7 +437,7 @@ const make = Effect.gen(function* () {
       Effect.withSpan("SecretRequests.consume"),
     );
 
-  /** A live ref's value, left in the store. */
+  /** A live ref's record, left in the store. */
   const readRef = Effect.fn("SecretRequests.readRef")(function* (input: {
     readonly ref: SecretRef;
     readonly projectId: ProjectId;
@@ -215,14 +457,14 @@ const make = Effect.gen(function* () {
       yield* removeLogged(storeName(input.ref));
       return yield* new SecretRequestError({ reason: "ref_expired" });
     }
-    return decoded.value.value;
+    return decoded.value;
   });
 
   const consumeRef = Effect.fn("SecretRequests.consumeRef")(function* (input: {
     readonly ref: SecretRef;
     readonly projectId: ProjectId;
   }) {
-    const value = yield* readRef(input);
+    const { value } = yield* readRef(input);
     // One use: the value moves into whatever consumed it. If it cannot be
     // deleted, it is not handed out, so a ref is never used twice.
     if (!(yield* removeLogged(storeName(input.ref)))) {
@@ -230,6 +472,28 @@ const make = Effect.gen(function* () {
     }
     return value;
   });
+
+  const consumeForFill: SecretRequests["Service"]["consumeForFill"] = Effect.fn(
+    "SecretRequests.consumeForFill",
+  )(
+    function* (input) {
+      const { entryId } = yield* readRef(input);
+      if (entryId === undefined) return undefined;
+      if (!(yield* removeLogged(storeName(input.ref)))) {
+        return yield* new SecretRequestError({ reason: "consume_failed" });
+      }
+      return entryId;
+    },
+    consumeLock.withPermits(1),
+    Effect.tap((entryId) =>
+      entryId === undefined
+        ? Effect.void
+        : Metrics.increment(Metrics.secretRefsConsumedTotal, { result: "used" }),
+    ),
+    Effect.tapError(() =>
+      Metrics.increment(Metrics.secretRefsConsumedTotal, { result: "rejected" }),
+    ),
+  );
 
   const saveToFile: SecretRequests["Service"]["saveToFile"] = Effect.fn(
     "SecretRequests.saveToFile",
@@ -264,7 +528,7 @@ const make = Effect.gen(function* () {
         return yield* removeStored;
       }
       // The stored value goes only after the file is complete, so a failed write can retry.
-      const value = yield* readRef({ ref, projectId: records.thread.projectId });
+      const { value } = yield* readRef({ ref, projectId: records.thread.projectId });
       const partial = `${file}.partial`;
       yield* fileSystem.makeDirectory(filesDir, { recursive: true, mode: 0o700 }).pipe(
         Effect.andThen(fileSystem.chmod(filesDir, 0o700)),
@@ -329,7 +593,15 @@ const make = Effect.gen(function* () {
     Effect.forkScoped,
   );
 
-  return SecretRequests.of({ answer, savedRef, consume, saveToFile });
+  return SecretRequests.of({
+    answer,
+    answerVaultApproval,
+    useVaultEntry,
+    savedRef,
+    consume,
+    consumeForFill,
+    saveToFile,
+  });
 });
 
 export const layer = Layer.effect(SecretRequests, make);
