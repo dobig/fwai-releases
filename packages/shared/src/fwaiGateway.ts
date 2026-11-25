@@ -193,6 +193,7 @@ export const FwaiGatewayOperation = Schema.Literals([
   "subscription",
   "organization",
   "organizationMembers",
+  "environmentKeyRegister",
 ]);
 export type FwaiGatewayOperation = typeof FwaiGatewayOperation.Type;
 
@@ -503,6 +504,97 @@ export const listOrganizationMembers = Effect.fn("fwaiGateway.listOrganizationMe
     );
   }
   return yield* failWithResponse("organizationMembers", response);
+});
+
+/**
+ * The request header that marks a model request as sent by fwai code (llm_gateway#760). It is
+ * only sent to these gateway origins and the configured one, never to a provider's own API.
+ */
+export const FWAI_ATTESTATION_HEADER = "X-FWAI-Attestation";
+const FWAI_ATTESTATION_ORIGINS = ["https://api.fwai.space", "https://api-staging.fwai.space"];
+
+export function isFwaiGatewayOrigin(
+  url: string | undefined | null,
+  configuredGatewayUrl: string | null,
+): boolean {
+  const origin = normalizeFwaiGatewayUrl(url);
+  if (origin === null) return false;
+  return (
+    FWAI_ATTESTATION_ORIGINS.includes(origin) ||
+    (configuredGatewayUrl !== null && origin === normalizeFwaiGatewayUrl(configuredGatewayUrl))
+  );
+}
+
+export interface FwaiEnvironmentKeyRegistration {
+  readonly environmentId: string;
+  /** Raw 32-byte Ed25519 public key, base64url without padding. */
+  readonly publicKey: string;
+  readonly name: string;
+}
+
+const FwaiEnvironmentKeyRegistered = Schema.Struct({
+  kid: Schema.String,
+  environment_id: Schema.String,
+  expires_at: Schema.String,
+  status: Schema.String,
+});
+
+export type FwaiEnvironmentKeyRegisterResult =
+  | { readonly _tag: "Registered"; readonly kid: string; readonly expiresAt: string }
+  /** Revoked, expired or registered elsewhere: the environment needs a new key. */
+  | { readonly _tag: "KeyRejected"; readonly code: "key_revoked" | "key_in_use" }
+  /** Accepted but not current (an old key still in its grace period): not a registration. */
+  | { readonly _tag: "NotCurrent"; readonly status: string }
+  /** `403 sign_in_again`: an account session from before device approval existed. */
+  | { readonly _tag: "SignInAgain" };
+
+/**
+ * `POST /v1/me/fwai/environments` with an interactive account session: registers an
+ * environment's attestation key. Idempotent for the same key; a new key supersedes the old one.
+ * `409 key_revoked` / `key_in_use` and a non-current 200 are results; anything else fails.
+ */
+export const registerEnvironmentKey = Effect.fn("fwaiGateway.registerEnvironmentKey")(function* (
+  config: FwaiGatewayConfig,
+  accessToken: string,
+  registration: FwaiEnvironmentKeyRegistration,
+) {
+  const response = yield* execute(
+    "environmentKeyRegister",
+    HttpClientRequest.post(gatewayUrl(config, "/v1/me/fwai/environments")).pipe(
+      HttpClientRequest.bearerToken(accessToken),
+      HttpClientRequest.bodyJsonUnsafe({
+        environment_id: registration.environmentId,
+        public_key: registration.publicKey,
+        name: registration.name,
+      }),
+    ),
+  );
+  if (isOk(response)) {
+    const body = yield* decodeBody(
+      "environmentKeyRegister",
+      response,
+      FwaiEnvironmentKeyRegistered,
+    );
+    return (body.status === "current"
+      ? { _tag: "Registered", kid: body.kid, expiresAt: body.expires_at }
+      : {
+          _tag: "NotCurrent",
+          status: body.status,
+        }) satisfies FwaiEnvironmentKeyRegisterResult as FwaiEnvironmentKeyRegisterResult;
+  }
+  const failure = yield* failWithResponse("environmentKeyRegister", response).pipe(Effect.flip);
+  if (failure.status === 409 && (failure.code === "key_revoked" || failure.code === "key_in_use")) {
+    return {
+      _tag: "KeyRejected",
+      code: failure.code,
+    } satisfies FwaiEnvironmentKeyRegisterResult as FwaiEnvironmentKeyRegisterResult;
+  }
+  if (failure.status === 403 && failure.code === "sign_in_again") {
+    return {
+      _tag: "SignInAgain",
+    } satisfies FwaiEnvironmentKeyRegisterResult as FwaiEnvironmentKeyRegisterResult;
+  }
+  return yield* failure;
 });
 
 /** True when the presented token belongs to an active user with fwai access. */

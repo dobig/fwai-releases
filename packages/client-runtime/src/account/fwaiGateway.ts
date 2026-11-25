@@ -1,6 +1,11 @@
-import type { OrchestrationV2ProviderThread } from "@t3tools/contracts";
+import type {
+  FwaiAttestationRegistration,
+  FwaiAttestationReport,
+  OrchestrationV2ProviderThread,
+} from "@t3tools/contracts";
 import * as FwaiGateway from "@t3tools/shared/fwaiGateway";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import type * as Layer from "effect/Layer";
 import type * as HttpClient from "effect/http/HttpClient";
 
@@ -44,6 +49,86 @@ export async function approveFwaiDeviceCode(
       Effect.provide(options.httpClient),
     ),
   );
+}
+
+let signInAgain = false;
+const signInAgainListeners = new Set<() => void>();
+const setSignInAgain = (value: boolean) => {
+  if (signInAgain === value) return;
+  signInAgain = value;
+  for (const listener of signInAgainListeners) listener();
+};
+
+/**
+ * True while the gateway refuses to register environment keys until this account signs in
+ * again (its session predates device approval). The account card shows it; signing out clears it.
+ */
+export const fwaiSignInAgainNotice = {
+  get: () => signInAgain,
+  subscribe: (listener: () => void) => {
+    signInAgainListeners.add(listener);
+    return () => {
+      signInAgainListeners.delete(listener);
+    };
+  },
+  clear: () => setSignInAgain(false),
+};
+
+/** The environment side of attestation key registration: the server's two RPCs. */
+export interface FwaiAttestationEnvironment {
+  readonly registration: () => Promise<FwaiAttestationRegistration | null>;
+  readonly report: (report: FwaiAttestationReport) => Promise<void>;
+}
+
+/**
+ * Registers a connected environment's attestation key under this app's account (llm_gateway#760)
+ * on every connect; a rejected key is replaced at once. Never throws: when the gateway cannot
+ * register it (signed out, unreachable, no endpoint yet, 403) the environment sends no header.
+ */
+export async function syncFwaiEnvironmentAttestation(
+  options: FwaiGatewayClientOptions,
+  environment: FwaiAttestationEnvironment,
+): Promise<void> {
+  // A rejected key is replaced once per connect; the replacement registers on the second pass.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const accessToken = await options.getAccessToken();
+    if (accessToken === null) return;
+    const registration = await environment.registration();
+    if (registration === null) return;
+    const result = await Effect.runPromise(
+      FwaiGateway.registerEnvironmentKey(options.gateway, accessToken, registration).pipe(
+        Effect.provide(options.httpClient),
+        Effect.option,
+      ),
+    );
+    if (Option.isNone(result)) return;
+    if (result.value._tag === "SignInAgain") {
+      setSignInAgain(true);
+      return;
+    }
+    // Any other answer means the session itself may register.
+    setSignInAgain(false);
+    if (result.value._tag === "Registered") {
+      await environment.report({
+        publicKey: registration.publicKey,
+        outcome: { status: "registered", expiresAt: result.value.expiresAt },
+      });
+      return;
+    }
+    if (result.value._tag === "NotCurrent") {
+      // Only an old key in its grace period answers this; the environment keeps its current key.
+      await Effect.runPromise(
+        Effect.logWarning("fwai attestation: the gateway kept this key in a non-current state", {
+          status: result.value.status,
+        }),
+      );
+      return;
+    }
+    await environment.report({
+      publicKey: registration.publicKey,
+      outcome: { status: "key-rejected" },
+    });
+  }
 }
 
 export interface FwaiPlanSummary {

@@ -188,6 +188,7 @@ import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderL
 import { latestProviderVersionCacheKeys } from "@t3tools/provider-core/server/maintenanceResolver";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ProviderAuthService from "./provider/ProviderAuthService.ts";
+import * as FwaiAttestation from "./fwaiGateway/FwaiAttestation.ts";
 import * as FwaiGatewayAuth from "./fwaiGateway/FwaiGatewayAuth.ts";
 import { makeProviderInstallation } from "./provider/providerInstallation.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
@@ -1426,6 +1427,7 @@ export const layerWsRpc = (
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const providerAuth = yield* ProviderAuthService.ProviderAuthService;
       const fwaiGatewayAuth = yield* FwaiGatewayAuth.FwaiGatewayAuth;
+      const fwaiAttestation = yield* FwaiAttestation.FwaiAttestation;
       const providerInstallation = yield* makeProviderInstallation();
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
@@ -2675,6 +2677,8 @@ export const layerWsRpc = (
         [WS_METHODS.fwaiGatewaySubscribe]: () => fwaiGatewayAuth.state,
         [WS_METHODS.fwaiGatewayConnect]: () => fwaiGatewayAuth.connect,
         [WS_METHODS.fwaiGatewayDisconnect]: () => fwaiGatewayAuth.disconnect,
+        [WS_METHODS.fwaiAttestationRegistration]: () => fwaiAttestation.registration,
+        [WS_METHODS.fwaiAttestationReport]: (input) => fwaiAttestation.report(input),
         [WS_METHODS.providerAuthCancel]: (input) => providerAuth.cancel(input, currentSessionId),
         [WS_METHODS.providerAuthLogout]: (input) => providerAuth.logout(input),
         [WS_METHODS.providerAuthSubscribe]: (input) =>

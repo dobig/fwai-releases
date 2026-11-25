@@ -29,6 +29,8 @@ import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcMiddleware from "effect/rpc/RpcMiddleware";
 import { NonNegativeInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
+  FwaiAttestationRegistration,
+  FwaiAttestationReport,
   FwaiGatewayConnectResult,
   FwaiGatewayConnectionState,
   FwaiGatewayRpcError,
@@ -475,6 +477,8 @@ export const WS_METHODS = {
   fwaiGatewaySubscribe: "fwai.gateway.subscribe",
   fwaiGatewayConnect: "fwai.gateway.connect",
   fwaiGatewayDisconnect: "fwai.gateway.disconnect",
+  fwaiAttestationRegistration: "fwai.attestation.registration",
+  fwaiAttestationReport: "fwai.attestation.report",
   providerAuthRespond: "provider.auth.respond",
   providerAuthCancel: "provider.auth.cancel",
   providerAuthLogout: "provider.auth.logout",
@@ -780,6 +784,16 @@ const WsFwaiGatewayConnectRpc = Rpc.make(WS_METHODS.fwaiGatewayConnect, {
 });
 const WsFwaiGatewayDisconnectRpc = Rpc.make(WS_METHODS.fwaiGatewayDisconnect, {
   payload: Schema.Struct({}),
+  error: FwaiGatewayRpcError,
+});
+/** The key a signed-in client should register now; null when none is needed or possible. */
+const WsFwaiAttestationRegistrationRpc = Rpc.make(WS_METHODS.fwaiAttestationRegistration, {
+  payload: Schema.Struct({}),
+  success: Schema.NullOr(FwaiAttestationRegistration),
+  error: FwaiGatewayRpcError,
+});
+const WsFwaiAttestationReportRpc = Rpc.make(WS_METHODS.fwaiAttestationReport, {
+  payload: FwaiAttestationReport,
   error: FwaiGatewayRpcError,
 });
 const WsCodexAuthCallbackSubscribeRpc = Rpc.make(WS_METHODS.codexAuthCallbackSubscribe, {
@@ -2209,6 +2223,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsFwaiGatewaySubscribeRpc,
   WsFwaiGatewayConnectRpc,
   WsFwaiGatewayDisconnectRpc,
+  WsFwaiAttestationRegistrationRpc,
+  WsFwaiAttestationReportRpc,
   WsProviderAuthRespondRpc,
   WsProviderAuthCancelRpc,
   WsProviderAuthLogoutRpc,

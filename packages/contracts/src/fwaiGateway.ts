@@ -30,3 +30,26 @@ export class FwaiGatewayRpcError extends Schema.TaggedError<FwaiGatewayRpcError>
   "FwaiGatewayRpcError",
   { message: Schema.String },
 ) {}
+
+/**
+ * The environment's attestation key a signed-in client registers with the gateway under its own
+ * account (llm_gateway#760). Only the public key leaves the environment.
+ */
+export const FwaiAttestationRegistration = Schema.Struct({
+  environmentId: Schema.String,
+  /** Raw Ed25519 public key, base64url without padding. */
+  publicKey: Schema.String,
+  name: Schema.String,
+});
+export type FwaiAttestationRegistration = typeof FwaiAttestationRegistration.Type;
+
+/** What the gateway answered when the client registered `publicKey`; a rejected key is replaced. */
+export const FwaiAttestationReport = Schema.Struct({
+  publicKey: Schema.String,
+  outcome: Schema.Union([
+    Schema.Struct({ status: Schema.Literal("registered"), expiresAt: IsoDateTime }),
+    // Revoked, expired, or registered to another account or environment.
+    Schema.Struct({ status: Schema.Literal("key-rejected") }),
+  ]),
+});
+export type FwaiAttestationReport = typeof FwaiAttestationReport.Type;

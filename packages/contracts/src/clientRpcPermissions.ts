@@ -5,6 +5,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthPreviewOperateScope,
+  AuthProvidersManageScope,
   AuthSettingsWriteScope,
   AuthSourceControlWriteScope,
   type AuthEnvironmentScope,
@@ -83,6 +84,9 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.vaultSyncRotate]: AuthSettingsWriteScope,
   [WS_METHODS.vaultSyncRevoke]: AuthSettingsWriteScope,
   [WS_METHODS.secretsAnswerVaultApproval]: AuthOrchestrationOperateScope,
+  // Registers the environment's attestation key under the client's own fwai account.
+  [WS_METHODS.fwaiAttestationRegistration]: AuthProvidersManageScope,
+  [WS_METHODS.fwaiAttestationReport]: AuthProvidersManageScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 
