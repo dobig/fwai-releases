@@ -103,8 +103,8 @@ describe("SecretsSyncSection", () => {
     confirm.mockResolvedValueOnce(true);
     await userEvent.click(page.getByRole("button", { name: "Turn off" }));
     await expect
-      .element(page.getByRole("button", { name: "Sync secrets across your machines" }))
-      .toBeVisible();
+      .element(page.getByRole("switch", { name: "Share secrets with my other machines" }))
+      .not.toBeChecked();
     expect(commands.turnOffVaultSync).toHaveBeenCalledExactlyOnceWith({
       environmentId: ENVIRONMENT,
       input: undefined,

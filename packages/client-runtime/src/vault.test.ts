@@ -13,6 +13,7 @@ import {
   vaultSaveFromRequestIssue,
   vaultPreviousVersionLabel,
   vaultSyncActions,
+  vaultSyncShared,
   vaultSyncEnvironmentRows,
   vaultSyncPendingLabel,
   vaultSyncProblemMessage,
@@ -156,6 +157,16 @@ describe("vaultSaveFromRequest", () => {
     expect(vaultSaveFromRequestIssue({ ...draft, kind: "token" })).toEqual({
       kind: "incomplete",
     });
+  });
+});
+
+describe("vaultSyncShared", () => {
+  it("is on from joining until this machine leaves", () => {
+    expect(vaultSyncShared("unavailable")).toBe(false);
+    expect(vaultSyncShared("off")).toBe(false);
+    expect(vaultSyncShared("waiting")).toBe(true);
+    expect(vaultSyncShared("needs_rejoin")).toBe(true);
+    expect(vaultSyncShared("on")).toBe(true);
   });
 });
 
