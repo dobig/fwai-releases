@@ -1,5 +1,8 @@
 import type { FwaiAccountSession, FwaiAccountUser } from "@t3tools/client-runtime/account";
-import { VAULT_SYNC_JOIN_CHOICE_LABEL, VAULT_SYNC_NOTICE } from "@t3tools/client-runtime/vault";
+import {
+  VAULT_SYNC_JOIN_CHOICE_DESCRIPTION,
+  VAULT_SYNC_JOIN_CHOICE_LABEL,
+} from "@t3tools/client-runtime/vault";
 import { type SubmitEvent, useState } from "react";
 
 import { APP_DISPLAY_NAME } from "../branding";
@@ -104,7 +107,9 @@ export function FwaiSignInScreen({
             />
             <span className="flex flex-col gap-1">
               <span>{VAULT_SYNC_JOIN_CHOICE_LABEL}</span>
-              <span className="text-xs text-muted-foreground">{VAULT_SYNC_NOTICE}</span>
+              <span className="text-xs text-muted-foreground">
+                {VAULT_SYNC_JOIN_CHOICE_DESCRIPTION}
+              </span>
             </span>
           </label>
         ) : null}

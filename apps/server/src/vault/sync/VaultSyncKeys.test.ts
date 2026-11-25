@@ -278,6 +278,21 @@ describe("VaultSyncKeys", () => {
     }),
   );
 
+  it.effect("a waiting environment picks up a sealed key when its status is read", () =>
+    Effect.gen(function* () {
+      const relay = makeRelay();
+      const a = makeEnvironment(relay, "env-a");
+      const b = makeEnvironment(relay, "env-b");
+      yield* (yield* a.keys).join();
+      yield* (yield* b.keys).join();
+      yield* (yield* a.keys).refresh();
+
+      // No hint reached b; reading its status is enough.
+      assert.equal((yield* (yield* b.keys).status()).state, "on");
+      assert.deepEqual((yield* keyOf(b)).key, (yield* keyOf(a)).key);
+    }),
+  );
+
   it.effect("a lost key shows needs_rejoin and is never replaced in place", () =>
     Effect.gen(function* () {
       const relay = makeRelay();

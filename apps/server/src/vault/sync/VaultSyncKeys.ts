@@ -459,6 +459,10 @@ const make = Effect.gen(function* () {
 
   return VaultSyncKeys.of({
     status: Effect.fn("VaultSyncKeys.status")(function* () {
+      // A missed hint would leave a joining environment waiting; looking at it picks the key up.
+      if ((yield* loadLocal)._tag === "waiting") {
+        yield* serialized(refreshLocked()).pipe(Effect.ignore);
+      }
       return yield* statusOf(yield* loadLocal);
     }),
     currentKey: Effect.fn("VaultSyncKeys.currentKey")(() => SubscriptionRef.get(keyRef)),

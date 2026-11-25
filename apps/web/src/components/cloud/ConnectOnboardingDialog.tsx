@@ -3,7 +3,10 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { VAULT_SYNC_JOIN_CHOICE_LABEL, VAULT_SYNC_NOTICE } from "@t3tools/client-runtime/vault";
+import {
+  VAULT_SYNC_JOIN_CHOICE_DESCRIPTION,
+  VAULT_SYNC_JOIN_CHOICE_LABEL,
+} from "@t3tools/client-runtime/vault";
 import { AuthRelayReadScope, AuthRelayWriteScope, type AuthSessionState } from "@t3tools/contracts";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { useState } from "react";
@@ -186,7 +189,7 @@ function ConfiguredConnectOnboardingDialog() {
         const failure = squashAtomCommandFailure(joined);
         toastManager.add({
           type: "error",
-          title: "Could not join secret sharing",
+          title: "Could not share secrets with your other machines",
           description:
             failure instanceof Error && failure.message
               ? failure.message
@@ -351,7 +354,7 @@ function PublishStep({
         {joinSecretSharing === null ? null : (
           <OnboardingToggleRow
             title={VAULT_SYNC_JOIN_CHOICE_LABEL}
-            description={VAULT_SYNC_NOTICE}
+            description={VAULT_SYNC_JOIN_CHOICE_DESCRIPTION}
             checked={joinSecretSharing}
             disabled={disabled}
             onCheckedChange={onJoinSecretSharingChange}

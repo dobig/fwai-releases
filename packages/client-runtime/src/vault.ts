@@ -215,9 +215,11 @@ export function vaultEntryDetails(entry: Pick<VaultEntrySummary, "username" | "d
 
 /** Shown wherever sync is offered: what fwai Connect can and cannot do with the vault. */
 export const VAULT_SYNC_NOTICE =
-  "Secrets are stored only on your machines. fwai Connect only relays encrypted data for sync; it cannot read it and cannot restore it. If every machine holding your secrets is lost, they cannot be recovered.";
+  "Secrets are stored only on your machines. fwai can't read or restore them: if you lose every machine that has them, they can't be recovered.";
 
-export const VAULT_SYNC_JOIN_CHOICE_LABEL = "Trust this environment and join secret sharing";
+export const VAULT_SYNC_JOIN_CHOICE_LABEL = "Share secrets with my other machines";
+export const VAULT_SYNC_JOIN_CHOICE_DESCRIPTION =
+  "Allow this machine to use the secrets saved on your other machines signed in to this account.";
 
 export const VAULT_SYNC_STATE_PRESENTATION: Readonly<
   Record<VaultSyncState, { readonly label: string; readonly description?: string }>

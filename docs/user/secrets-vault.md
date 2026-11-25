@@ -45,11 +45,10 @@ your saved secrets without asking. Share with that setting only with people you 
 Entries available in **All projects** can sync between your machines through fwai Connect.
 Entries limited to chosen projects never leave the machine they were saved on.
 
-Secrets are stored only on your machines. fwai Connect only relays encrypted data for sync; it
-cannot read it and cannot restore it. If every machine holding your secrets is lost, they cannot be
-recovered.
+Secrets are stored only on your machines. fwai can't read or restore them: if you lose every machine
+that has them, they can't be recovered.
 
-To turn it on, tick **Trust this environment and join secret sharing** when you sign in to the
+To turn it on, tick **Share secrets with my other machines** when you sign in to the
 desktop app or set up fwai Connect, or open **Settings → Secrets** on a machine linked through fwai
 Connect and choose **Sync secrets across your machines**. The first machine starts syncing at once.
 Every later one waits until another machine that already syncs is online, then joins on its own.
