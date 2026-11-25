@@ -97,7 +97,7 @@ function useJoinSecretSharingOnceLinked(linkedEnvironmentId: string | null) {
       const failure = squashAtomCommandFailure(result);
       toastManager.add({
         type: "error",
-        title: "Could not join secret sharing",
+        title: "Could not share secrets with your other machines",
         description:
           failure instanceof Error && failure.message
             ? failure.message
