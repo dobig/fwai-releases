@@ -5,6 +5,7 @@ import * as CodexManagedTokenBroker from "./CodexManagedTokenBroker.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, it, assert, expect } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -40,6 +41,9 @@ import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 
 import { checkCodexProviderStatus, type CodexAppServerProviderSnapshot } from "./CodexProvider.ts";
 import { checkClaudeProviderStatus } from "./ClaudeProvider.ts";
+import { ClaudeExecutableFileCheck, ClaudeLauncherShimRead } from "./Drivers/ClaudeExecutable.ts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as AntigravityInstallation from "./AntigravityInstallation.ts";
 import * as ModelManifest from "./ModelManifest.ts";
@@ -2268,6 +2272,30 @@ it.layer(
   });
 
   describe("checkClaudeProviderStatus", () => {
+    it.effect("names the Windows launcher script when the account check cannot start it", () =>
+      Effect.gen(function* () {
+        const shim = "H:\\workplace\\claude\\node_modules\\.bin\\claude.CMD";
+        const status = yield* checkClaudeProviderStatus(
+          defaultClaudeSettings,
+          () => Effect.fail(new Cause.UnknownError("spawn EINVAL")),
+          {},
+        ).pipe(
+          Effect.provideService(HostProcess.Platform, "win32"),
+          Effect.provideService(SpawnExecutableResolution, () => shim),
+          Effect.provideService(ClaudeExecutableFileCheck, () => false),
+          Effect.provideService(ClaudeLauncherShimRead, () => undefined),
+        );
+        assert.strictEqual(status.status, "warning");
+        assert.include(status.message, shim);
+        assert.include(status.message, "claude.exe");
+      }).pipe(
+        Effect.provide(
+          // Through a Windows shell the version check arrives as one command string, not args.
+          layerMockSpawner(() => ({ stdout: "1.0.0\n", stderr: "", code: 0 })),
+        ),
+      ),
+    );
+
     it.effect("reports a logged-out CLI as unauthenticated", () =>
       Effect.gen(function* () {
         const status = yield* checkClaudeProviderStatus(
