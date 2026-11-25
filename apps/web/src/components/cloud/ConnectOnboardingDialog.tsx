@@ -1,4 +1,12 @@
 import { useAtomValue } from "@effect/atom-react";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import {
+  VAULT_SYNC_JOIN_CHOICE_DESCRIPTION,
+  VAULT_SYNC_JOIN_CHOICE_LABEL,
+} from "@t3tools/client-runtime/vault";
 import { AuthRelayReadScope, AuthRelayWriteScope, type AuthSessionState } from "@t3tools/contracts";
 import { AsyncResult, Atom } from "effect/reactivity";
 import { useState } from "react";
@@ -18,7 +26,9 @@ import {
   usePrimaryEnvironment,
   usePrimaryEnvironmentId,
 } from "~/state/environments";
+import { serverEnvironment } from "~/state/server";
 import { environmentSession, readEnvironmentScope, useEnvironmentScope } from "~/state/session";
+import { useAtomCommand } from "~/state/use-atom-command";
 import { CloudEnvironmentConnectRows } from "./CloudEnvironmentConnectList";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -72,6 +82,11 @@ function ConfiguredConnectOnboardingDialog() {
   const [step, setStep] = useState<OnboardingStep>("devices");
   const [exposeEnvironment, setExposeEnvironment] = useState(true);
   const [publishAgentActivity, setPublishAgentActivity] = useState(true);
+  const [joinSecretSharing, setJoinSecretSharing] = useState(false);
+  const joinVaultSync = useAtomCommand(serverEnvironment.joinVaultSync, { reportFailure: false });
+  const canJoinSecretSharing = useAtomValue(
+    serverEnvironment.joinVaultSync.permissionAtom(primaryEnvironmentId),
+  );
   const [dontShowAgain, setDontShowAgain] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
   const [prefilledFromLinkState, setPrefilledFromLinkState] = useState(false);
@@ -114,6 +129,7 @@ function ConfiguredConnectOnboardingDialog() {
       setPrefilledFromLinkState(false);
       setExposeEnvironment(true);
       setPublishAgentActivity(true);
+      setJoinSecretSharing(false);
       setDontShowAgain(false);
       setStep(canManageRelay && controller.linkState.target !== null ? "publish" : "devices");
       setOpenForAccount(requestedAccount);
@@ -167,6 +183,20 @@ function ConfiguredConnectOnboardingDialog() {
       managedTunnel: exposeEnvironment,
       publish: publishAgentActivity,
     });
+    if (ok && joinSecretSharing && canJoinSecretSharing) {
+      const joined = await joinVaultSync({ environmentId: primaryEnvironmentId, input: undefined });
+      if (joined._tag === "Failure" && !isAtomCommandInterrupted(joined)) {
+        const failure = squashAtomCommandFailure(joined);
+        toastManager.add({
+          type: "error",
+          title: "Could not share secrets with your other machines",
+          description:
+            failure instanceof Error && failure.message
+              ? failure.message
+              : "Join from Settings → Secrets.",
+        });
+      }
+    }
     setIsApplying(false);
     if (!ok) return;
     toastManager.add({
@@ -220,6 +250,8 @@ function ConfiguredConnectOnboardingDialog() {
             <PublishStep
               exposeEnvironment={exposeEnvironment}
               publishAgentActivity={publishAgentActivity}
+              joinSecretSharing={canJoinSecretSharing ? joinSecretSharing : null}
+              onJoinSecretSharingChange={setJoinSecretSharing}
               disabled={isApplying || !canManageRelay || linkStateData === null}
               operationError={controller.operationError ?? controller.linkState.error}
               onExposeEnvironmentChange={(enabled) => {
@@ -285,6 +317,8 @@ const STEP_LABELS: Record<OnboardingStep, string> = {
 function PublishStep({
   exposeEnvironment,
   publishAgentActivity,
+  joinSecretSharing,
+  onJoinSecretSharingChange,
   disabled,
   operationError,
   onExposeEnvironmentChange,
@@ -292,6 +326,9 @@ function PublishStep({
 }: {
   readonly exposeEnvironment: boolean;
   readonly publishAgentActivity: boolean;
+  /** Null when this session cannot change the vault. */
+  readonly joinSecretSharing: boolean | null;
+  readonly onJoinSecretSharingChange: (enabled: boolean) => void;
   readonly disabled: boolean;
   readonly operationError: string | null;
   readonly onExposeEnvironmentChange: (enabled: boolean) => void;
@@ -314,6 +351,15 @@ function PublishStep({
           disabled={disabled}
           onCheckedChange={onPublishAgentActivityChange}
         />
+        {joinSecretSharing === null ? null : (
+          <OnboardingToggleRow
+            title={VAULT_SYNC_JOIN_CHOICE_LABEL}
+            description={VAULT_SYNC_JOIN_CHOICE_DESCRIPTION}
+            checked={joinSecretSharing}
+            disabled={disabled}
+            onCheckedChange={onJoinSecretSharingChange}
+          />
+        )}
       </div>
       {operationError ? <p className="text-xs text-destructive">{operationError}</p> : null}
     </div>

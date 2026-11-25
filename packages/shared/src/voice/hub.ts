@@ -31,7 +31,7 @@ export interface VoiceSocket {
 export interface HubDeps {
   readonly config: () => VoiceConfig;
   readonly sessions: Sessions;
-  readonly speaker: { hold(): void; release(): void };
+  readonly speaker: { hold(): void; release(): void; silence(): void };
   readonly store: VoiceHistory;
   readonly transcribe: Transcribe;
   /** A fresh end-of-speech detector per turn; `startTimeout` is set for reply windows. */
@@ -216,6 +216,8 @@ export class VoiceHub implements VoicePlayer {
             return sessions.readInbox();
           case "replay":
             return sessions.replay();
+          case "silence":
+            return this.deps.speaker.silence();
           case "select":
             if (!sessions.select(String(message.id)))
               socket.send({ type: "error", text: "这个 session 已经不在了。" });
@@ -335,6 +337,7 @@ export class VoiceHub implements VoicePlayer {
         this.deps.config(),
         chunks(),
         this.deps.sessions.hotwords(),
+        (partial) => socket.send({ type: "partial", text: partial }),
       );
       return { text, detector, dead };
     } finally {

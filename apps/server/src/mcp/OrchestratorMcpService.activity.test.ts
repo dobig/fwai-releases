@@ -22,6 +22,7 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+import * as VaultService from "../vault/VaultService.ts";
 import * as ThreadLaunchService from "../orchestration-v2/ThreadLaunchService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
@@ -32,6 +33,7 @@ import { liveThreadShell } from "./McpToolAccess.testkit.ts";
 const layerOrchestratorService = OrchestratorMcpService.layer.pipe(
   Layer.provide(Layer.mock(ThreadLaunchService.ThreadLaunchService)({})),
   Layer.provide(Layer.mock(GitVcsDriver.GitVcsDriver)({})),
+  Layer.provide(Layer.mock(VaultService.VaultService)({})),
 );
 
 const environmentId = EnvironmentId.make("environment-mcp-orchestrator-detail");
@@ -535,4 +537,80 @@ it("readThread and sendToThread reach threads in other projects", async () => {
       .pipe(Effect.flip);
     expect(stopped.code).toBe("parent_not_active");
   }).pipe(Effect.provide(layer), Effect.runPromise);
+});
+
+it("scheduleTask stores the account the calling run acts for", async () => {
+  const projection = {
+    thread: baseThread({
+      threadId: parentThreadId,
+      title: "Parent",
+      instanceId: parentInstanceId,
+      model: "gpt-5.4",
+    }),
+    runs: [
+      { ...makeRun({ id: activeRunId, ordinal: 1, status: "running" }), actingAccountId: "bob" },
+    ],
+    visibleTurnItems: [],
+    runtimeRequests: [],
+    messages: [],
+    contextTransfers: [],
+    subagents: [],
+    updatedAt: now,
+  } as unknown as OrchestrationV2ThreadProjection;
+  const saved: Array<string | undefined> = [];
+  const layer = layerOrchestratorService.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getThreadShell: () =>
+            Effect.succeed(projection.thread as unknown as OrchestrationV2ThreadShell),
+          getProjectThreadRecords: () => Effect.succeed(projection),
+          getThreadRecords: () => Effect.succeed(projection),
+        } satisfies Partial<ThreadManagementService.ThreadManagementService["Service"]>),
+        ServerSettings.layerTest(),
+        Layer.mock(ProviderRegistry.ProviderRegistry)({
+          getProviders: Effect.succeed([]),
+        } satisfies Partial<ProviderRegistry.ProviderRegistry["Service"]>),
+        Layer.mock(ProjectService.ProjectService)({
+          getById: () => Effect.succeedSome({ id: projectId } as never),
+        }),
+        Layer.mock(SecretRequests.SecretRequests)({}),
+        Layer.mock(ScheduledTaskService.ScheduledTaskService)({
+          upsert: (input, options) => {
+            saved.push(options?.actingAccountId);
+            return Effect.succeed({
+              task: {
+                ...input,
+                id: ScheduledTaskId.make("task-acting"),
+                threadId: input.threadId ?? null,
+                schedule: { type: "interval", everyMs: 3_600_000 },
+                createdBy: "agent",
+                creationSource: "mcp",
+                createdAt: "2026-08-04T12:00:00.000Z",
+                updatedAt: "2026-08-04T12:00:00.000Z",
+                nextRunAt: null,
+                lastRunAt: null,
+                lastRunStatus: "never",
+                lastRunError: null,
+                runCount: 0,
+              },
+            });
+          },
+        } satisfies Partial<ScheduledTaskService.ScheduledTaskService["Service"]>),
+        Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({
+          list: () => Effect.succeed([]),
+        } satisfies Partial<ProviderAdapterRegistry.ProviderAdapterRegistryV2["Service"]>),
+        NodeCrypto.layer,
+      ),
+    ),
+  );
+
+  await Effect.gen(function* () {
+    const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+    yield* service.scheduleTask(makeScope(), {
+      prompt: "check in later",
+      schedule: { type: "interval", everyMs: 3_600_000 },
+    });
+  }).pipe(Effect.provide(layer), Effect.runPromise);
+  expect(saved).toEqual(["bob"]);
 });

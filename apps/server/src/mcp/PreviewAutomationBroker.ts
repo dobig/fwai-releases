@@ -19,6 +19,8 @@ import {
   PreviewAutomationTargetNotEditableError,
   PreviewAutomationTimeoutError,
   PreviewAutomationUnsupportedClientError,
+  PreviewAutomationVaultFillError,
+  PreviewAutomationVaultFillFailure,
   PreviewTabId,
   type PreviewAutomationError,
   type PreviewAutomationOperation,
@@ -125,6 +127,15 @@ interface BrokerState {
   readonly focusSequence: number;
 }
 
+type Route =
+  | { readonly refused: boolean }
+  | {
+      readonly connection: ClientConnection;
+      readonly requestId: string;
+      readonly requestContext: PreviewAutomationRequestErrorContext;
+      readonly requestSequence: number;
+    };
+
 const removeConnectionFromState = (
   current: BrokerState,
   clientId: string,
@@ -168,6 +179,7 @@ const hostAssignmentKey = (scope: McpInvocationContext.McpThreadInvocationScope)
 
 const isPreviewTabId = Schema.is(PreviewTabId);
 const decodeControlReason = Schema.decodeUnknownOption(PreviewAutomationControlReason);
+const decodeVaultFillFailure = Schema.decodeUnknownOption(PreviewAutomationVaultFillFailure);
 
 const readResultTabId = (result: unknown): PreviewTabId | null | undefined => {
   if (typeof result !== "object" || result === null || !("tabId" in result)) return undefined;
@@ -329,6 +341,17 @@ const classifyResponseError = (
         ...remoteDiagnostics,
         ...(maximumBytes === undefined ? {} : { maximumBytes }),
       });
+    }
+    case "PreviewAutomationVaultFillError": {
+      const reason = decodeVaultFillFailure(error.detail);
+      if (Option.isSome(reason)) {
+        return new PreviewAutomationVaultFillError({
+          threadId: context.threadId,
+          reason: reason.value,
+          cause: error,
+        });
+      }
+      return new PreviewAutomationExecutionError({ ...context, ...remoteDiagnostics });
     }
     case "PreviewAutomationUnavailableError":
       return new PreviewAutomationRemoteUnavailableError({
@@ -505,7 +528,7 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
     input: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0],
   ): Effect.fn.Return<A, PreviewAutomationError> {
     const deferred = yield* Deferred.make<unknown, PreviewAutomationError>();
-    const route = yield* SynchronizedRef.modify(state, (current) => {
+    const route = yield* SynchronizedRef.modify(state, (current): readonly [Route, BrokerState] => {
       const assignments = new Map(
         Array.from(current.assignments).filter(([, assignment]) => {
           const connection = current.clients.get(assignment.clientId);
@@ -550,7 +573,12 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
                 )[0];
       if (!connection) {
         if (!hasLiveAssignment) assignments.delete(assignmentKey);
-        return [undefined, { ...current, assignments }] as const;
+        const refused =
+          hasLiveAssignment ||
+          Array.from(current.clients.values()).some(
+            (host) => host.environmentId === input.scope.environmentId,
+          );
+        return [{ refused }, { ...current, assignments }];
       }
       // First open may install Chromium for ten minutes; keep it alive without replaying effects.
       const timeoutMs =
@@ -593,7 +621,14 @@ export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
         { ...current, assignments, pending, requestSequence: current.requestSequence + 1 },
       ] as const;
     });
-    if (!route) {
+    if ("refused" in route) {
+      // A host that cannot type vault secrets is never handed the value instead.
+      if (route.refused && input.operation === "typeVaultSecret") {
+        return yield* new PreviewAutomationVaultFillError({
+          threadId: input.scope.thread.threadId,
+          reason: "vault_unavailable_on_host",
+        });
+      }
       return yield* new PreviewAutomationNoAvailableHostError({
         operation: input.operation,
         environmentId: input.scope.environmentId,

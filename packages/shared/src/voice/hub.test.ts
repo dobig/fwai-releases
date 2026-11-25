@@ -55,6 +55,10 @@ function setup(heard: string) {
       this.held++;
     },
     release() {},
+    silenced: 0,
+    silence() {
+      this.silenced++;
+    },
   };
   const sessions = new Sessions({ config: () => DEFAULT_VOICE_CONFIG, t3, llm, speaker });
   sessions.initialized = true;
@@ -64,10 +68,11 @@ function setup(heard: string) {
     return original(text, followup);
   };
   const history: Array<HistoryEvent> = [];
-  const transcribe: Transcribe = async (_config, chunks) => {
+  const transcribe: Transcribe = async (_config, chunks, _hotwords, onPartial) => {
     for await (const _ of chunks) {
       // drain what the page sends, as the recognizer does
     }
+    if (heard) onPartial?.(heard.slice(0, 2));
     return heard;
   };
   const windows: Array<number | undefined> = [];
@@ -147,6 +152,17 @@ describe("VoiceHub", () => {
     expect(handled).toEqual([["现在是哪个", null]]);
     expect(history.map((e) => [e.kind, e.text])).toEqual([["heard", "现在是哪个"]]);
     expect(speaker.held).toBe(1);
+    expect(client.messages.find((m) => m.type === "partial")).toEqual({
+      type: "partial",
+      text: "现在",
+    });
+  });
+
+  it("stops all speech on silence", () => {
+    const { hub, speaker } = setup("");
+    const connection = hub.connect(new Client());
+    connection.receive(JSON.stringify({ type: "silence" }));
+    expect(speaker.silenced).toBe(1);
   });
 
   it("ends a silent reply window quietly", async () => {

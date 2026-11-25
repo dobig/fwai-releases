@@ -54,6 +54,7 @@ describe("V2 preview upgrade", () => {
         [72, "LinkRemote"],
         [73, "LinkActivity"],
         [74, "PersonalAgent"],
+        [75, "ScheduledTaskActingAccount"],
       ]);
       assert.deepStrictEqual(yield* runMigrations(), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM orchestration_v2_legacy_imports`, imports);
@@ -151,6 +152,7 @@ describe("V2 preview upgrade", () => {
         [72, "LinkRemote"],
         [73, "LinkActivity"],
         [74, "PersonalAgent"],
+        [75, "ScheduledTaskActingAccount"],
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );

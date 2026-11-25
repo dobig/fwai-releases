@@ -24,6 +24,7 @@ import {
   RunId,
   ThreadId,
   TurnItemId,
+  VaultEntryId,
   type ThreadPullRequestLink,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -4600,6 +4601,66 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           [thread?.pendingRuntimeRequest?.blocking, memoryShell.pendingRuntimeRequest?.blocking],
           terminal ? [false, false] : [true, true],
         );
+      }
+    }),
+  );
+
+  it.effect("shows another account's vault request as an approval for the owner", () =>
+    Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+      const sql = yield* SqlClient.SqlClient;
+      const suffix = "shell-vault-approval";
+      const threadId = yield* addRolledBackRecoveryCandidate(suffix);
+      const runId = RunId.make(`run:${suffix}:rolled-back`);
+      const nodeId = NodeId.make(`node:${suffix}:rolled-back`);
+      const now = yield* DateTime.now;
+      yield* projectionStore.apply({
+        id: EventId.make(`event:${suffix}`),
+        type: "turn-item.updated",
+        threadId,
+        runId,
+        nodeId,
+        driver,
+        occurredAt: now,
+        payload: {
+          id: TurnItemId.make(`secret:${suffix}`),
+          threadId,
+          runId,
+          nodeId,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 2,
+          status: "waiting",
+          title: null,
+          startedAt: now,
+          completedAt: null,
+          updatedAt: now,
+          type: "secret_request",
+          label: "Acme",
+          reason: "Sign in.",
+          secretStatus: "pending",
+          vault: {
+            entryId: VaultEntryId.make("entry-1"),
+            entryName: "Acme login",
+            requestedByAccountId: "user-bob",
+          },
+        },
+      });
+      yield* sql`
+        UPDATE orchestration_v2_projection_runs
+        SET status = 'running', payload_json = json_set(payload_json, '$.status', 'running')
+        WHERE run_id = ${runId}
+      `;
+      const shell = (yield* projectionStore.getShellSnapshot()).threads.find(
+        (thread) => thread.id === threadId,
+      );
+      const memoryShell = ProjectionStore.threadShellFromProjection(
+        yield* projectionStore.getThreadProjection(threadId),
+      );
+      for (const pending of [shell?.pendingRuntimeRequest, memoryShell.pendingRuntimeRequest]) {
+        assert.include(pending, { kind: "permission", requestedByAccountId: "user-bob" });
       }
     }),
   );

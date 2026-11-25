@@ -5078,6 +5078,30 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     ]);
   });
 
+  /**
+   * fwai: the account a new run acts for. The command's own wins; otherwise a continuation acts
+   * for the run it continues and an agent's message for the sending thread's live run.
+   */
+  const resolveActingAccountId = Effect.fn("Orchestrator.resolveActingAccountId")(function* (
+    command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
+    runs: ReadonlyArray<OrchestrationV2Run>,
+  ) {
+    if (command.actingAccountId !== undefined) return command.actingAccountId;
+    const continuedRunId =
+      command.restartContinuationOfRunId ??
+      command.usageLimitContinuationOfRunId ??
+      command.manualContinuationOfRunId ??
+      command.delegatedCompletion?.parentRunId;
+    if (continuedRunId !== undefined) {
+      return runs.find((run) => run.id === continuedRunId)?.actingAccountId;
+    }
+    if (command.senderThreadId === undefined) return undefined;
+    const sender = yield* projectionStore
+      .getThreadRecords(command.senderThreadId, ["runs"])
+      .pipe(Effect.orElseSucceed(() => ({ runs: [] as ReadonlyArray<OrchestrationV2Run> })));
+    return sender.runs.find(isBlockingRun)?.actingAccountId;
+  });
+
   const dispatchMessage = Effect.fn("Orchestrator.dispatchMessage")(function* (
     command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
@@ -5512,20 +5536,24 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             payload: { ...sourcePlan, status: "completed" },
           });
 
-    // A collaborator's message never joins a run that may act without the owner's approval (#20).
+    const actingAccountId = yield* resolveActingAccountId(command, projection.runs);
+    // A collaborator's message never joins a run that may act without the owner's approval (#20),
+    // nor one acting for another account.
     if (
-      command.runtimeModeCeiling !== undefined &&
+      (command.runtimeModeCeiling !== undefined || actingAccountId !== undefined) &&
       (dispatchMode.type === "steer_active" || dispatchMode.type === "restart_active")
     ) {
       const targetRunId = dispatchMode.targetRunId;
       const target = projection.runs.find((candidate) => candidate.id === targetRunId);
       if (
-        dispatchMode.type === "restart_active" ||
-        target?.runtimeModeCeiling === undefined ||
-        exceededDispatchModeLimit(
-          { runtimeMode: command.runtimeModeCeiling, interactionMode: "default" },
-          { runtimeMode: target.runtimeModeCeiling, interactionMode: "default" },
-        ) !== undefined
+        (actingAccountId !== undefined && target?.actingAccountId !== actingAccountId) ||
+        (command.runtimeModeCeiling !== undefined &&
+          (dispatchMode.type === "restart_active" ||
+            target?.runtimeModeCeiling === undefined ||
+            exceededDispatchModeLimit(
+              { runtimeMode: command.runtimeModeCeiling, interactionMode: "default" },
+              { runtimeMode: target.runtimeModeCeiling, interactionMode: "default" },
+            ) !== undefined))
       ) {
         dispatchMode = { type: "queue_after_active" };
       }
@@ -5725,6 +5753,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(command.runtimeModeCeiling === undefined
           ? {}
           : { runtimeModeCeiling: command.runtimeModeCeiling }),
+        ...(actingAccountId === undefined ? {} : { actingAccountId }),
         rootNodeId,
         activeAttemptId: attemptId,
         status: "queued",
@@ -6095,6 +6124,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(command.runtimeModeCeiling === undefined
           ? {}
           : { runtimeModeCeiling: command.runtimeModeCeiling }),
+        ...(actingAccountId === undefined ? {} : { actingAccountId }),
         rootNodeId,
         activeAttemptId: attemptId,
         status: dispatchMode.type === "defer_start" ? "preparing" : "starting",
@@ -6792,6 +6822,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ...(command.runtimeModeCeiling === undefined
         ? {}
         : { runtimeModeCeiling: command.runtimeModeCeiling }),
+      ...(actingAccountId === undefined ? {} : { actingAccountId }),
       rootNodeId,
       activeAttemptId: attemptId,
       status: "starting",
@@ -7488,6 +7519,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         commandId: command.commandId,
         threadId: childThreadId,
         senderThreadId: command.parentThreadId,
+        ...(parentRun.actingAccountId === undefined
+          ? {}
+          : { actingAccountId: parentRun.actingAccountId }),
         messageId: childMessageId,
         text: command.task,
         attachments: [],
@@ -7603,6 +7637,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(command.runtimeModeCeiling === undefined
             ? {}
             : { runtimeModeCeiling: command.runtimeModeCeiling }),
+          ...(command.actingAccountId === undefined
+            ? {}
+            : { actingAccountId: command.actingAccountId }),
           messageId,
           text: command.task,
           attachments: [],
@@ -8260,6 +8297,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...(command.placeholder === undefined ? {} : { placeholder: command.placeholder }),
             ...(command.delivery === undefined ? {} : { delivery: command.delivery }),
             secretStatus: command.secretStatus,
+            ...(command.vault === undefined ? {} : { vault: command.vault }),
           };
       yield* emit(
         events,
@@ -8761,6 +8799,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         commandId: command.commandId,
         commandType: command.type,
         cause: "Automatic completion deliveries cannot be promoted to Steer.",
+      });
+    }
+    if (
+      queuedRun.actingAccountId !== undefined &&
+      projection.runs.find((run) => run.id === command.targetRunId)?.actingAccountId !==
+        queuedRun.actingAccountId
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: "A message can steer only a run acting for the same account.",
       });
     }
 

@@ -150,6 +150,13 @@ const handlers = {
       return yield* service.requestSecret(scope, input);
     }),
   ),
+  secret_list: McpToolAccess.readsAsCaller(() =>
+    Effect.gen(function* () {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+      return yield* service.listSecrets(scope);
+    }),
+  ),
   create_threads: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
       const scope = yield* McpInvocationContext.McpInvocationContext;

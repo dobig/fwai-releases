@@ -129,6 +129,22 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
     }).pipe(Effect.provide(layerServerSecretStore())),
   );
 
+  it.effect("lists stored names by prefix, skipping other secrets and temp files", () =>
+    Effect.gen(function* () {
+      const secretStore = yield* ServerSecretStore.ServerSecretStore;
+      const fileSystem = yield* FileSystem.FileSystem;
+      yield* secretStore.set("vault-entry-a", new Uint8Array([1]));
+      yield* secretStore.set("vault-entry-b", new Uint8Array([2]));
+      yield* secretStore.set("vault-usage-a", new Uint8Array([3]));
+      yield* fileSystem.writeFileString(
+        `${secretStore.directory}/vault-entry-c.bin.0000.tmp`,
+        "partial",
+      );
+      const names = yield* secretStore.listNames!("vault-entry-");
+      assert.deepEqual([...names].sort(), ["vault-entry-a", "vault-entry-b"]);
+    }).pipe(Effect.provide(layerServerSecretStore())),
+  );
+
   it.effect("returns the persisted secret when concurrent creators race", () =>
     Effect.gen(function* () {
       const secretStore = yield* ServerSecretStore.ServerSecretStore;

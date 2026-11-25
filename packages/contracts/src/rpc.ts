@@ -394,7 +394,25 @@ import {
   ScheduledTaskUpsertInput,
   ScheduledTaskMutationResult,
 } from "./scheduledTask.ts";
-import { SecretRequestAnswerInput, SecretRequestError } from "./secretRequest.ts";
+import {
+  SecretRequestAnswerInput,
+  SecretRequestError,
+  SecretVaultApprovalInput,
+} from "./secretRequest.ts";
+import {
+  VaultCreateInput,
+  VaultDeleteInput,
+  VaultEntrySummary,
+  VaultError,
+  VaultListResult,
+  VaultMatchesForRequestInput,
+  VaultMatchesForRequestResult,
+  VaultPreviousVersionInput,
+  VaultSyncError,
+  VaultSyncRevokeInput,
+  VaultSyncStatus,
+  VaultUpdateInput,
+} from "./vault.ts";
 import {
   ProjectCloneActionInput,
   ProjectCloneActionResult,
@@ -560,6 +578,19 @@ export const WS_METHODS = {
   scheduledTasksRunNow: "scheduledTasks.runNow",
   scheduledTasksRotateWebhookToken: "scheduledTasks.rotateWebhookToken",
   secretsAnswerRequest: "secrets.answerRequest",
+  secretsAnswerVaultApproval: "secrets.answerVaultApproval",
+  vaultList: "vault.list",
+  vaultCreate: "vault.create",
+  vaultUpdate: "vault.update",
+  vaultDelete: "vault.delete",
+  vaultMatchesForRequest: "vault.matchesForRequest",
+  vaultUsePreviousVersion: "vault.usePreviousVersion",
+  vaultSyncStatus: "vault.syncStatus",
+  vaultSyncJoin: "vault.syncJoin",
+  vaultSyncLeave: "vault.syncLeave",
+  vaultSyncTurnOff: "vault.syncTurnOff",
+  vaultSyncRotate: "vault.syncRotate",
+  vaultSyncRevoke: "vault.syncRevoke",
   guestShareCreate: "guestShare.create",
   threadShareGrant: "threadShare.grant",
   threadShareRevoke: "threadShare.revoke",
@@ -2037,6 +2068,67 @@ const WsSecretsAnswerRequestRpc = Rpc.make(WS_METHODS.secretsAnswerRequest, {
   payload: SecretRequestAnswerInput,
   error: Schema.Union([SecretRequestError, EnvironmentAuthorizationError]),
 });
+const WsSecretsAnswerVaultApprovalRpc = Rpc.make(WS_METHODS.secretsAnswerVaultApproval, {
+  payload: SecretVaultApprovalInput,
+  error: Schema.Union([SecretRequestError, EnvironmentAuthorizationError]),
+});
+
+const vaultError = Schema.Union([VaultError, EnvironmentAuthorizationError]);
+const WsVaultListRpc = Rpc.make(WS_METHODS.vaultList, {
+  success: VaultListResult,
+  error: vaultError,
+});
+const WsVaultCreateRpc = Rpc.make(WS_METHODS.vaultCreate, {
+  payload: VaultCreateInput,
+  success: VaultEntrySummary,
+  error: vaultError,
+});
+const WsVaultUpdateRpc = Rpc.make(WS_METHODS.vaultUpdate, {
+  payload: VaultUpdateInput,
+  success: VaultEntrySummary,
+  error: vaultError,
+});
+const WsVaultDeleteRpc = Rpc.make(WS_METHODS.vaultDelete, {
+  payload: VaultDeleteInput,
+  error: vaultError,
+});
+const WsVaultMatchesForRequestRpc = Rpc.make(WS_METHODS.vaultMatchesForRequest, {
+  payload: VaultMatchesForRequestInput,
+  success: VaultMatchesForRequestResult,
+  error: vaultError,
+});
+
+const WsVaultUsePreviousVersionRpc = Rpc.make(WS_METHODS.vaultUsePreviousVersion, {
+  payload: VaultPreviousVersionInput,
+  success: VaultEntrySummary,
+  error: vaultError,
+});
+const vaultSyncError = Schema.Union([VaultSyncError, EnvironmentAuthorizationError]);
+const WsVaultSyncStatusRpc = Rpc.make(WS_METHODS.vaultSyncStatus, {
+  success: VaultSyncStatus,
+  error: vaultSyncError,
+});
+const WsVaultSyncJoinRpc = Rpc.make(WS_METHODS.vaultSyncJoin, {
+  success: VaultSyncStatus,
+  error: vaultSyncError,
+});
+const WsVaultSyncLeaveRpc = Rpc.make(WS_METHODS.vaultSyncLeave, {
+  success: VaultSyncStatus,
+  error: vaultSyncError,
+});
+const WsVaultSyncTurnOffRpc = Rpc.make(WS_METHODS.vaultSyncTurnOff, {
+  success: VaultSyncStatus,
+  error: vaultSyncError,
+});
+const WsVaultSyncRotateRpc = Rpc.make(WS_METHODS.vaultSyncRotate, {
+  success: VaultSyncStatus,
+  error: vaultSyncError,
+});
+const WsVaultSyncRevokeRpc = Rpc.make(WS_METHODS.vaultSyncRevoke, {
+  payload: VaultSyncRevokeInput,
+  success: VaultSyncStatus,
+  error: vaultSyncError,
+});
 
 const WsScheduledTasksListWebhookDeliveriesRpc = Rpc.make(
   WS_METHODS.scheduledTasksListWebhookDeliveries,
@@ -2165,6 +2257,19 @@ export const WsRpcGroup = RpcGroup.make(
   WsScheduledTasksRunNowRpc,
   WsScheduledTasksRotateWebhookTokenRpc,
   WsSecretsAnswerRequestRpc,
+  WsSecretsAnswerVaultApprovalRpc,
+  WsVaultListRpc,
+  WsVaultCreateRpc,
+  WsVaultUpdateRpc,
+  WsVaultDeleteRpc,
+  WsVaultMatchesForRequestRpc,
+  WsVaultUsePreviousVersionRpc,
+  WsVaultSyncStatusRpc,
+  WsVaultSyncJoinRpc,
+  WsVaultSyncLeaveRpc,
+  WsVaultSyncTurnOffRpc,
+  WsVaultSyncRotateRpc,
+  WsVaultSyncRevokeRpc,
   WsScheduledTasksListWebhookDeliveriesRpc,
   WsScheduledTasksGetWebhookDeliveryRpc,
   WsServerReportClientActivityRpc,

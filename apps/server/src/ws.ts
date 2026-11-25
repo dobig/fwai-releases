@@ -96,6 +96,7 @@ import {
   ThreadId,
   type TerminalMetadataStreamEvent,
   type PullRequestRef,
+  type VaultSyncStatus,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
@@ -124,6 +125,10 @@ import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import * as LinkService from "./link/LinkService.ts";
 import * as PersonalAgentService from "./personalAgent/PersonalAgentService.ts";
 import * as SecretRequests from "./secrets/SecretRequests.ts";
+import * as VaultRequestMatches from "./vault/VaultRequestMatches.ts";
+import * as VaultService from "./vault/VaultService.ts";
+import * as VaultEntrySync from "./vault/sync/VaultEntrySync.ts";
+import * as VaultSyncKeys from "./vault/sync/VaultSyncKeys.ts";
 import * as GuestShareService from "./guest/GuestShareService.ts";
 import * as ThreadShareService from "./threadShare/ThreadShareService.ts";
 import * as ThreadAccessPolicy from "./threadShare/ThreadAccessPolicy.ts";
@@ -1351,6 +1356,19 @@ export const layerWsRpc = (
       const links = yield* LinkService.LinkService;
       const personalAgent = yield* PersonalAgentService.PersonalAgentService;
       const secretRequests = yield* SecretRequests.SecretRequests;
+      const vault = yield* VaultService.VaultService;
+      const vaultSyncKeys = yield* VaultSyncKeys.VaultSyncKeys;
+      const vaultEntrySync = yield* VaultEntrySync.VaultEntrySync;
+      const withUploadState = <E>(status: Effect.Effect<VaultSyncStatus, E>) =>
+        Effect.zipWith(status, vaultEntrySync.uploadState(), (membership, upload) => ({
+          ...membership,
+          ...upload,
+        }));
+      const vaultMatchesContext = yield* Effect.context<
+        | VaultService.VaultService
+        | ThreadManagementService.ThreadManagementService
+        | PreviewManager.PreviewManager
+      >();
       const guestShares = yield* GuestShareService.GuestShareService;
       const threadShares = yield* ThreadShareService.ThreadShareService;
       const threadAccess = yield* ThreadAccessPolicy.ThreadAccessPolicy;
@@ -2009,7 +2027,7 @@ export const layerWsRpc = (
                                 creationSource:
                                   "creationSource" in command ? command.creationSource : "web",
                               }),
-                              currentSession.principal?.accountId,
+                              currentSession.principal,
                               runtimeModeCeiling ?? undefined,
                             ),
                           ),
@@ -2334,6 +2352,25 @@ export const layerWsRpc = (
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
             Effect.andThen(secretRequests.answer(input)),
           ),
+        [WS_METHODS.secretsAnswerVaultApproval]: (input) =>
+          Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
+            Effect.andThen(secretRequests.answerVaultApproval(input)),
+          ),
+        [WS_METHODS.vaultList]: (_input) => vault.list(),
+        [WS_METHODS.vaultCreate]: (input) => vault.create(input),
+        [WS_METHODS.vaultUpdate]: (input) => vault.update(input),
+        [WS_METHODS.vaultDelete]: (input) => vault.delete(input.id),
+        [WS_METHODS.vaultMatchesForRequest]: (input) =>
+          VaultRequestMatches.matchesForRequest(input).pipe(Effect.provide(vaultMatchesContext)),
+        [WS_METHODS.vaultUsePreviousVersion]: (input) =>
+          vaultEntrySync.usePreviousVersion(input.id),
+        [WS_METHODS.vaultSyncStatus]: (_input) => withUploadState(vaultSyncKeys.status()),
+        [WS_METHODS.vaultSyncJoin]: (_input) => withUploadState(vaultSyncKeys.join()),
+        [WS_METHODS.vaultSyncLeave]: (_input) => withUploadState(vaultSyncKeys.leave()),
+        [WS_METHODS.vaultSyncTurnOff]: (_input) => withUploadState(vaultSyncKeys.turnOff()),
+        [WS_METHODS.vaultSyncRotate]: (_input) => withUploadState(vaultSyncKeys.rotate()),
+        [WS_METHODS.vaultSyncRevoke]: (input) =>
+          withUploadState(vaultSyncKeys.revoke(input.environmentId)),
         [WS_METHODS.scheduledTasksListWebhookDeliveries]: (input) =>
           Effect.annotateCurrentSpan({ "scheduled_task.id": input.id }).pipe(
             Effect.andThen(scheduledTasks.listWebhookDeliveries(input)),

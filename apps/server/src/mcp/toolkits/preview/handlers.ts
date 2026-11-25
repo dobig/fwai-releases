@@ -1,3 +1,4 @@
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
@@ -7,6 +8,7 @@ import {
   PreviewAutomationRecordingTransferError,
   PreviewAutomationRecordingDesktopUpdateRequiredError,
   PreviewAutomationRecordingArtifact,
+  PreviewAutomationVaultFillError,
   type ToolActivityIcon,
   type ThreadId,
   type PreviewAutomationOperation,
@@ -17,7 +19,9 @@ import {
   type PreviewAutomationSetColorSchemeResult,
   type PreviewAutomationSnapshot,
   type PreviewAutomationStatus,
+  type PreviewAutomationTypeInput,
   type PreviewTabId,
+  type SecretRef,
 } from "@t3tools/contracts";
 
 import {
@@ -31,6 +35,10 @@ import * as ServerConfig from "../../../config.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
+import { unavailable } from "../../threadAccess.ts";
+import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as SecretRequests from "../../../secrets/SecretRequests.ts";
+import * as VaultService from "../../../vault/VaultService.ts";
 import { PreviewSnapshotToolkit, PreviewStandardToolkit, PreviewToolkit } from "./tools.ts";
 
 /** Whether a preview the agent
@@ -109,6 +117,48 @@ const invokeTargeted = <A extends object>(
     })),
   );
 };
+
+/** The host reads the value by entry id and checks the field's origin; it never enters a request. */
+const typeVaultSecret = Effect.fn("PreviewToolkit.typeVaultSecret")(function* ({
+  secretRef,
+  text: _text,
+  ...target
+}: PreviewAutomationTypeInput & { readonly secretRef: SecretRef }) {
+  const scope = yield* McpInvocationContext.requireThreadMcpCapability("preview");
+  const threadId = scope.thread.threadId;
+  const records = yield* (yield* ThreadManagementService.ThreadManagementService)
+    .getThreadRecords(threadId, ["runs"])
+    .pipe(Effect.mapError(unavailable));
+  const vault = yield* VaultService.VaultService;
+  const entryId = yield* (yield* SecretRequests.SecretRequests).consumeForFill({
+    ref: secretRef,
+    projectId: records.thread.projectId,
+  });
+  const mismatch = new PreviewAutomationVaultFillError({ threadId, reason: "domain_mismatch" });
+  if (entryId === undefined) return yield* mismatch;
+  if ((yield* vault.get(entryId)).domains.length === 0) return yield* mismatch;
+  const result = yield* invokeTargeted<object>(
+    "typeVaultSecret",
+    { ...target, entryId },
+    target.timeoutMs,
+  );
+  const accountId = records.runs.findLast(
+    (run) => !ThreadManagementService.isTerminalRunStatus(run.status),
+  )?.actingAccountId;
+  yield* vault
+    .recordUse(entryId, {
+      at: DateTime.formatIso(yield* DateTime.now),
+      threadId,
+      delivery: "form_fill",
+      ...(accountId === undefined ? {} : { accountId }),
+    })
+    .pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("Could not record a vault form fill", { errorTag: error._tag }),
+      ),
+    );
+  return result;
+});
 
 const UploadedRecordingArtifact = Schema.Struct({
   ...PreviewAutomationRecordingArtifact.fields,
@@ -208,8 +258,10 @@ const handlers = {
   preview_click: McpToolAccess.actsAsCaller((input) =>
     invokeTargeted<object>("click", input, input.timeoutMs),
   ),
-  preview_type: McpToolAccess.actsAsCaller((input) =>
-    invokeTargeted<object>("type", input, input.timeoutMs),
+  preview_type: McpToolAccess.actsAsCaller(({ secretRef, ...input }) =>
+    secretRef === undefined
+      ? invokeTargeted<object>("type", input, input.timeoutMs)
+      : typeVaultSecret({ ...input, secretRef }),
   ),
   preview_hover: McpToolAccess.actsAsCaller((input) =>
     invokeTargeted<object>("hover", input, input.timeoutMs),

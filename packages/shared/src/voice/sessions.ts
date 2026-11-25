@@ -533,7 +533,10 @@ export class Sessions {
     const threadId = tracked.thread.threadId;
     if (
       !this.passive &&
-      (this.current === null || threadId === this.current || this.awaiting.has(threadId))
+      (this.config().announceAll === true ||
+        this.current === null ||
+        threadId === this.current ||
+        this.awaiting.has(threadId))
     ) {
       this.awaiting.delete(threadId);
       this.news(text, { followup: threadId });

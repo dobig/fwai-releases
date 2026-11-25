@@ -69,6 +69,12 @@ export class Speaker implements SpeakerPort {
     this.player.stop();
   }
 
+  /** Stop talking: cut current speech and drop everything queued. */
+  silence(): void {
+    this.queue = [];
+    this.player.stop();
+  }
+
   release(): void {
     this.quiet = true;
     for (const resolve of this.quietWaiters.splice(0)) resolve();

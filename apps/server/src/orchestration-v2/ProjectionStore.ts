@@ -1562,11 +1562,14 @@ function secretRequestAsPendingInput(
   item: OrchestrationV2TurnItem | null,
 ): OrchestrationV2PendingRuntimeRequestSummary | null {
   if (item?.type !== "secret_request" || item.nodeId === null) return null;
+  const requestedByAccountId = item.vault?.requestedByAccountId;
   return {
     id: RuntimeRequestId.make(item.id),
-    kind: "user_input",
+    // fwai: another account's run asking to use a vault entry waits for the owner.
+    kind: requestedByAccountId === undefined ? "user_input" : "permission",
     createdAt: item.startedAt ?? item.updatedAt,
     blocking: true,
+    ...(requestedByAccountId === undefined ? {} : { requestedByAccountId }),
   };
 }
 

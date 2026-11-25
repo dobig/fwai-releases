@@ -68,6 +68,12 @@ import * as ThreadForkService from "./ThreadForkService.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+import * as VaultService from "../vault/VaultService.ts";
+import * as VaultEntryRelay from "../vault/sync/VaultEntryRelay.ts";
+import * as VaultEntrySync from "../vault/sync/VaultEntrySync.ts";
+import * as VaultSyncKeys from "../vault/sync/VaultSyncKeys.ts";
+import * as VaultSyncKeysRelay from "../vault/sync/VaultSyncKeysRelay.ts";
+import * as VaultSyncTriggers from "../vault/sync/VaultSyncTriggers.ts";
 
 export const layerEventInfrastructure = Layer.mergeAll(
   OrchestrationEventStore.layer,
@@ -297,8 +303,18 @@ const layerThreadLaunchProvided = ThreadLaunchService.layer.pipe(
 const layerThreadLifecycleProvided = ThreadLifecycleService.layer.pipe(
   Layer.provide(layerThreadManagementProvided),
 );
+// fwai: vault sync. One instance of each, shared by ws.ts, the hint route and triggers.
+const layerVaultSyncKeys = VaultSyncKeys.layer.pipe(Layer.provide(VaultSyncKeysRelay.layer));
+const layerVaultEntrySync = VaultEntrySync.layer.pipe(
+  Layer.provide(Layer.mergeAll(VaultService.layer, layerVaultSyncKeys, VaultEntryRelay.layer)),
+);
+const layerVaultSync = Layer.mergeAll(
+  layerVaultSyncKeys,
+  layerVaultEntrySync,
+  VaultSyncTriggers.layer.pipe(Layer.provide(Layer.merge(layerVaultSyncKeys, layerVaultEntrySync))),
+);
 const layerSecretRequestsProvided = SecretRequests.layer.pipe(
-  Layer.provide(layerThreadManagementProvided),
+  Layer.provide(Layer.merge(layerThreadManagementProvided, VaultService.layer)),
 );
 const layerScheduledTaskProvided = ScheduledTaskService.layer.pipe(
   Layer.provide(
@@ -415,6 +431,8 @@ export const layerProduction = Layer.mergeAll(
   layerThreadLifecycleProvided,
   layerScheduledTaskProvided,
   layerSecretRequestsProvided,
+  VaultService.layer,
+  layerVaultSync,
   layerLinkService.pipe(Layer.provide(LinkRelay.layer)),
   GuestShareService.layer.pipe(
     Layer.provide(Layer.merge(layerOrchestratorProvided, layerCommandOutputHubProvided)),

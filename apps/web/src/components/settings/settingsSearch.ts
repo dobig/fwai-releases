@@ -36,6 +36,7 @@ export type SettingsPath =
   | "/settings/beta"
   | "/settings/sharing"
   | "/settings/agent"
+  | "/settings/secrets"
   | "/settings/archived";
 
 export type SettingsSearchScope =
@@ -99,6 +100,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/beta": "Beta",
   "/settings/sharing": "Sharing",
   "/settings/agent": "Agent",
+  "/settings/secrets": "Secrets",
   "/settings/archived": "Archive",
 };
 
@@ -1076,6 +1078,19 @@ export const SETTINGS_SEARCH_ITEMS = [
     cloudOnly: true,
   },
   {
+    id: "secrets",
+    title: "Secrets",
+    to: "/settings/secrets",
+    searchTerms: ["vault passwords tokens notes credentials login api keys domains"],
+  },
+  {
+    id: "secrets-sync",
+    title: "Sync secrets",
+    to: "/settings/secrets",
+    searchTerms: ["vault sync machines devices encrypted rotate key revoke join"],
+    cloudOnly: true,
+  },
+  {
     id: "org-share-requests",
     title: "Organization share requests",
     to: "/settings/sharing",
@@ -1110,6 +1125,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/beta": null,
   "/settings/sharing": null,
   "/settings/agent": null,
+  "/settings/secrets": null,
   "/settings/archived": "project-defaults",
 };
 

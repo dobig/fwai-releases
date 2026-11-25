@@ -195,6 +195,7 @@ interface ScheduledTaskRow {
   readonly interaction_mode: string;
   readonly created_by: string;
   readonly creation_source: string;
+  readonly acting_account_id: string | null;
   readonly created_at: string;
   readonly updated_at: string;
   readonly next_run_at: string | null;
@@ -229,8 +230,10 @@ export class ScheduledTaskService extends Context.Service<
   {
     readonly list: () => Effect.Effect<ScheduledTaskListResult, ScheduledTaskError>;
     readonly subscribeList: () => Stream.Stream<ScheduledTaskListResult, ScheduledTaskError>;
+    /** `actingAccountId` comes from the server, never a client: the run that saves the task. */
     readonly upsert: (
       input: ScheduledTaskUpsertInput,
+      options?: { readonly actingAccountId?: string | undefined },
     ) => Effect.Effect<ScheduledTaskMutationResult, ScheduledTaskError>;
     readonly setEnabled: (
       input: ScheduledTaskSetEnabledInput,
@@ -335,6 +338,7 @@ const decodeRow = Effect.fnUntraced(
       interactionMode: row.interaction_mode,
       createdBy: row.created_by,
       creationSource: row.creation_source,
+      ...(row.acting_account_id === null ? {} : { actingAccountId: row.acting_account_id }),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       nextRunAt: row.next_run_at,
@@ -438,6 +442,7 @@ export const layer = Layer.effect(
         interaction_mode,
         created_by,
         creation_source,
+        acting_account_id,
         created_at,
         updated_at,
         next_run_at,
@@ -475,6 +480,7 @@ export const layer = Layer.effect(
         interaction_mode,
         created_by,
         creation_source,
+        acting_account_id,
         created_at,
         updated_at,
         next_run_at,
@@ -550,6 +556,7 @@ export const layer = Layer.effect(
           interaction_mode,
           created_by,
           creation_source,
+          acting_account_id,
           created_at,
           updated_at,
           next_run_at,
@@ -574,6 +581,7 @@ export const layer = Layer.effect(
           ${task.interactionMode},
           ${task.createdBy},
           ${task.creationSource},
+          ${task.actingAccountId ?? null},
           ${task.createdAt},
           ${task.updatedAt},
           ${task.nextRunAt},
@@ -598,6 +606,7 @@ export const layer = Layer.effect(
           runtime_mode = excluded.runtime_mode,
           interaction_mode = excluded.interaction_mode,
           creation_source = excluded.creation_source,
+          acting_account_id = excluded.acting_account_id,
           updated_at = excluded.updated_at,
           next_run_at = excluded.next_run_at,
           -- Only rotate changes a live token, so a save racing a rotation
@@ -829,6 +838,9 @@ export const layer = Layer.effect(
                     },
                     createdBy: active.createdBy,
                     creationSource: active.creationSource,
+                    ...(active.actingAccountId === undefined
+                      ? {}
+                      : { actingAccountId: active.actingAccountId }),
                   })
                   .pipe(Effect.map((launched) => launched.threadId)),
               )
@@ -847,6 +859,9 @@ export const layer = Layer.effect(
                     mode: "queue",
                     createdBy: active.createdBy,
                     creationSource: active.creationSource,
+                    ...(active.actingAccountId === undefined
+                      ? {}
+                      : { actingAccountId: active.actingAccountId }),
                   })
                   .pipe(Effect.as(ThreadId.make(active.threadId))),
               );
@@ -1038,7 +1053,7 @@ export const layer = Layer.effect(
 
     const upsert: ScheduledTaskService["Service"]["upsert"] = Effect.fn(
       "ScheduledTaskService.upsert",
-    )(function* (input) {
+    )(function* (input, options) {
       const now = yield* localNow;
       const uuid =
         input.commandId === undefined
@@ -1132,6 +1147,8 @@ export const layer = Layer.effect(
         (yield* managedFolders.isScratchProject(input.projectId))
           ? { type: "root" }
           : input.workspaceStrategy;
+      // Saved by a non-owner run, the task acts for that account from then on.
+      const actingAccountId = options?.actingAccountId ?? existingTask?.actingAccountId;
       const scheduleUnchanged =
         existingTask !== null &&
         existingTask.enabled === input.enabled &&
@@ -1150,6 +1167,7 @@ export const layer = Layer.effect(
         interactionMode: input.interactionMode,
         createdBy: existingTask?.createdBy ?? input.createdBy ?? "user",
         creationSource: input.creationSource ?? "web",
+        ...(actingAccountId === undefined ? {} : { actingAccountId }),
         createdAt: existingTask?.createdAt ?? iso(now),
         updatedAt: iso(now),
         nextRunAt: scheduleUnchanged

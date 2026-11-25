@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { DEFAULT_VOICE_CONFIG } from "./config.ts";
+import { DEFAULT_VOICE_CONFIG, type VoiceConfig } from "./config.ts";
 import type { Intent, SessionListing, VoiceLlm } from "./llm.ts";
 import {
   mentions,
@@ -166,12 +166,13 @@ function make(
     store?: VoiceStateStore;
     speaker?: FakeSpeaker;
     now?: () => number;
+    config?: () => VoiceConfig;
   } = {},
 ) {
   const speaker = options.speaker ?? new FakeSpeaker();
   const t3 = options.t3 ?? new FakeT3();
   const sessions = new Sessions({
-    config,
+    config: options.config ?? config,
     t3,
     llm: options.llm ?? new FakeLlm(),
     speaker,
@@ -292,6 +293,15 @@ describe("announcing", () => {
     await sessions.handle("听通知");
     await sessions.handle("听通知");
     expect(speaker.said).toEqual(["改文档：改文档做完了。 / 改文档在等你回答。", "没有新通知。"]);
+  });
+
+  it("reads news from every session when announceAll is on", () => {
+    const { sessions, speaker } = make({ config: () => ({ ...config(), announceAll: true }) });
+    twoSessions(sessions);
+    sessions.current = "t1";
+    sessions.notify(tracked(sessions, "t2"), "改文档做完了。");
+    expect(speaker.said).toEqual(["改文档做完了。"]);
+    expect(sessions.inbox).toEqual([]);
   });
 
   it("announces everything when there is no current session", () => {

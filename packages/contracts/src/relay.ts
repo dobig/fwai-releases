@@ -47,6 +47,22 @@ import {
 } from "./personalAgent.ts";
 import { RuntimeMode } from "./providerPolicy.ts";
 import {
+  RelayVaultConflictError,
+  RelayVaultEnrollRequest,
+  RelayVaultEntriesQuery,
+  RelayVaultEntriesResponse,
+  RelayVaultNotEnrolledError,
+  RelayVaultPutEntryRequest,
+  RelayVaultPutEntryResponse,
+  RelayVaultPutKeyRequest,
+  RelayVaultQuotaError,
+  RelayVaultRotateRequest,
+  RelayVaultState,
+} from "./relayVault.ts";
+import { VaultEntryId } from "./vault.ts";
+
+export * from "./relayVault.ts";
+import {
   THREAD_SHARE_LIMIT,
   ThreadShare,
   ThreadShareRole,
@@ -1903,6 +1919,53 @@ const RelayServerGroup = HttpApiGroup.make("server")
       success: RelayThreadGrantListResponse,
       error: RelayAuthAndInternalErrors,
     }).annotate(OpenApi.Summary, "List the status of every share grant of this environment"),
+    // fwai: vault sync. Ciphertext and sealed keys only; see relayVault.ts.
+    HttpApiEndpoint.get("getVaultState", "/v1/environment/vault", {
+      success: RelayVaultState,
+      error: RelayAuthAndInternalErrors,
+    }).annotate(OpenApi.Summary, "Read the account's vault sync state for this environment"),
+    HttpApiEndpoint.post("enrollVault", "/v1/environment/vault/enrollment", {
+      payload: RelayVaultEnrollRequest,
+      success: RelayVaultState,
+      error: RelayAuthAndInternalErrors,
+    }).annotate(OpenApi.Summary, "Join this environment to the account's vault sync"),
+    HttpApiEndpoint.put("putVaultKey", "/v1/environment/vault/environments/:environmentId/key", {
+      params: Schema.Struct({ environmentId: EnvironmentId }),
+      payload: RelayVaultPutKeyRequest,
+      error: [...RelayAuthAndInternalErrors, RelayVaultConflictError, RelayVaultNotEnrolledError],
+    }).annotate(OpenApi.Summary, "Seal the vault key to an enrolled environment"),
+    HttpApiEndpoint.get("listVaultEntries", "/v1/environment/vault/entries", {
+      query: RelayVaultEntriesQuery,
+      success: RelayVaultEntriesResponse,
+      error: [...RelayAuthAndInternalErrors, RelayVaultNotEnrolledError],
+    }).annotate(OpenApi.Summary, "Read vault entries changed since a cursor"),
+    HttpApiEndpoint.put("putVaultEntry", "/v1/environment/vault/entries/:entryId", {
+      params: Schema.Struct({ entryId: VaultEntryId }),
+      payload: RelayVaultPutEntryRequest,
+      success: RelayVaultPutEntryResponse,
+      error: [
+        ...RelayAuthAndInternalErrors,
+        RelayVaultConflictError,
+        RelayVaultQuotaError,
+        RelayVaultNotEnrolledError,
+      ],
+    }).annotate(OpenApi.Summary, "Write or delete one vault entry"),
+    HttpApiEndpoint.post("rotateVault", "/v1/environment/vault/rotation", {
+      payload: RelayVaultRotateRequest,
+      success: RelayVaultState,
+      error: [
+        ...RelayAuthAndInternalErrors,
+        RelayVaultConflictError,
+        RelayVaultQuotaError,
+        RelayVaultNotEnrolledError,
+      ],
+    }).annotate(OpenApi.Summary, "Replace the vault key, optionally dropping environments"),
+    HttpApiEndpoint.delete("leaveVault", "/v1/environment/vault/enrollment", {
+      error: RelayAuthAndInternalErrors,
+    }).annotate(OpenApi.Summary, "Remove this environment from vault sync"),
+    HttpApiEndpoint.delete("deleteVault", "/v1/environment/vault", {
+      error: [...RelayAuthAndInternalErrors, RelayVaultNotEnrolledError],
+    }).annotate(OpenApi.Summary, "Turn vault sync off for the account and delete its rows"),
     HttpApiEndpoint.post("sendLinkEnvelope", "/v1/environment/link-envelopes", {
       payload: RelayLinkEnvelope,
       success: RelayLinkSendResponse,

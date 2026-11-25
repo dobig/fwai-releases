@@ -35,7 +35,10 @@ import {
   spawnAndCollect,
   type ServerProviderDraft,
 } from "@t3tools/provider-core/server/snapshotProbe";
-import { resolveClaudeSdkExecutablePath } from "./Drivers/ClaudeExecutable.ts";
+import {
+  findUnlaunchableClaudeShim,
+  resolveClaudeSdkExecutablePath,
+} from "./Drivers/ClaudeExecutable.ts";
 import { hasClaudeManagedMcpConfig, makeClaudeEnvironment } from "./Drivers/ClaudeHome.ts";
 import { discoverClaudeSkills } from "./Drivers/ClaudeSkills.ts";
 import type { ProviderWorkspaceSnapshot } from "@t3tools/provider-core/server/driver";
@@ -579,6 +582,10 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   const dedupedSlashCommands = dedupeSlashCommands(slashCommands);
 
   if (!capabilities) {
+    const unlaunchableShim =
+      probeFailure && !Cause.isTimeoutError(probeFailure)
+        ? yield* findUnlaunchableClaudeShim(claudeSettings.binaryPath, resolvedEnvironment)
+        : undefined;
     return buildServerProvider({
       presentation: CLAUDE_PRESENTATION,
       enabled: claudeSettings.enabled,
@@ -595,7 +602,9 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         message: probeFailure
           ? Cause.isTimeoutError(probeFailure)
             ? `Timed out after ${CAPABILITIES_PROBE_TIMEOUT_MS / 1_000}s while checking Claude account status.`
-            : "Claude Agent CLI failed while checking account status."
+            : unlaunchableShim !== undefined
+              ? `${claudeSettings.binaryPath} resolves to the launcher script ${unlaunchableShim}, which fwai cannot start. Set Binary Path to the full path of claude.exe.`
+              : "Claude Agent CLI failed while checking account status."
           : "Could not verify Claude authentication status from initialization result.",
       },
     });

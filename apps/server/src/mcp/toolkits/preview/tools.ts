@@ -25,6 +25,8 @@ import {
   PreviewAutomationTypeInput,
   PreviewAutomationUploadInput,
   PreviewAutomationWaitForInput,
+  SecretRequestError,
+  VaultError,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import * as FileSystem from "effect/FileSystem";
@@ -34,6 +36,8 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import * as ServerConfig from "../../../config.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as SecretRequests from "../../../secrets/SecretRequests.ts";
+import * as VaultService from "../../../vault/VaultService.ts";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
@@ -169,11 +173,12 @@ const PreviewClickTool = browserTool(
 
 const PreviewTypeTool = browserTool(
   Tool.make("preview_type", {
-    description: "Type literal text into one input. `clear=true` replaces the current text.",
+    description:
+      "Type literal text into one input, or a vault secret by `secretRef` without revealing it. `clear=true` replaces the current text.",
     parameters: PreviewAutomationTypeInput,
     success: PreviewActionResult,
-    failure: PreviewToolFailure,
-    dependencies,
+    failure: Schema.Union([PreviewToolFailure, SecretRequestError, VaultError]),
+    dependencies: [...dependencies, SecretRequests.SecretRequests, VaultService.VaultService],
   }).annotate(Tool.Title, "Type into preview page"),
 );
 

@@ -19,6 +19,7 @@ import {
   HardDriveIcon,
   PanelsTopLeftIcon,
   KeyboardIcon,
+  KeyRoundIcon,
   Link2Icon,
   PaletteIcon,
   SearchIcon,
@@ -89,6 +90,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/beta": FlaskConicalIcon,
   "/settings/sharing": UsersIcon,
   "/settings/agent": BotMessageSquareIcon,
+  "/settings/secrets": KeyRoundIcon,
   "/settings/archived": ArchiveIcon,
 };
 
