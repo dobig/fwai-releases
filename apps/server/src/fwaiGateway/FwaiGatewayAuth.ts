@@ -170,7 +170,10 @@ const make = Effect.gen(function* () {
   const connect = Effect.gen(function* () {
     const current = yield* SubscriptionRef.get(state);
     if (current.status === "pending") return { userCode: current.userCode };
-    const config = yield* fwaiGatewayConfig;
+    const config = {
+      ...(yield* fwaiGatewayConfig),
+      clientId: FwaiGateway.FWAI_ENVIRONMENT_CLIENT_ID,
+    };
     const device = yield* FwaiGateway.requestDeviceCode(config, {
       deviceName: yield* HostProcess.Hostname,
       platform: yield* HostProcess.Platform,

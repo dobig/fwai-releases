@@ -10,6 +10,11 @@ import { HttpClient, HttpClientRequest, type HttpClientResponse } from "effect/h
 
 export const FWAI_DEFAULT_GATEWAY_URL = "https://api.fwai.space";
 export const FWAI_DEFAULT_CLIENT_ID = "fwai";
+/**
+ * The gateway client of an environment's model-forwarding session (llm_gateway#758). Fixed:
+ * `T3CODE_FWAI_CLIENT_ID` overrides the account client only, which may not forward.
+ */
+export const FWAI_ENVIRONMENT_CLIENT_ID = "fwai_environment";
 export const FWAI_DEVICE_CODE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
 
 const GATEWAY_REQUEST_TIMEOUT = Duration.seconds(15);
