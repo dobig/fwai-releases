@@ -49,8 +49,9 @@ Secrets are stored only on your machines. fwai can't read or restore them: if yo
 that has them, they can't be recovered.
 
 To turn it on, tick **Share secrets with my other machines** when you sign in to the
-desktop app or set up fwai Connect, or open **Settings → Secrets** on a machine linked through fwai
-Connect and choose **Sync secrets across your machines**. The first machine starts syncing at once.
+desktop app or set up fwai Connect, or turn on the same switch in **Settings → Secrets** on a
+machine linked through fwai Connect. Turning it off stops sharing on that machine; its entries stay
+on it. The first machine starts syncing at once.
 Every later one waits until another machine that already syncs is online, then joins on its own.
 
 In the same section you can:
@@ -58,7 +59,6 @@ In the same section you can:
 - **Revoke** another machine. It stops receiving changes, but it may still hold the values it
   already had, so change those passwords.
 - **Rotate key** if the key may have been read on one of your machines, for example by an agent.
-- **Stop syncing on this machine**. Its entries stay on it; joining again later starts over.
 - **Turn off sync everywhere**. This deletes the synced copies in fwai Connect; every machine keeps
   its own entries.
 

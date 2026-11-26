@@ -5,6 +5,8 @@ import {
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import {
+  VAULT_SYNC_JOIN_CHOICE_DESCRIPTION,
+  VAULT_SYNC_JOIN_CHOICE_LABEL,
   VAULT_SYNC_NOTICE,
   VAULT_SYNC_STATE_PRESENTATION,
   vaultSyncActions,
@@ -12,6 +14,7 @@ import {
   vaultSyncEnvironmentRows,
   vaultSyncPendingLabel,
   vaultSyncProblemMessage,
+  vaultSyncShared,
   type VaultSyncAction,
   type VaultSyncConfirmation,
 } from "@t3tools/client-runtime/vault";
@@ -24,6 +27,7 @@ import { serverEnvironment } from "~/state/server";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
@@ -120,35 +124,51 @@ export function SecretsSyncSection({
           <SettingsRow
             title={
               <span className="flex items-center gap-2">
-                Sync
-                <Badge variant={STATE_BADGES[status.state]} size="sm">
-                  {presentation.label}
-                </Badge>
+                {VAULT_SYNC_JOIN_CHOICE_LABEL}
+                {status.state === "waiting" || status.state === "needs_rejoin" ? (
+                  <Badge variant={STATE_BADGES[status.state]} size="sm">
+                    {presentation.label}
+                  </Badge>
+                ) : null}
               </span>
             }
-            description={VAULT_SYNC_NOTICE}
-            status={
-              [
-                presentation.description,
-                vaultSyncPendingLabel(status.pendingUploads),
-                status.problem ? vaultSyncProblemMessage(status.problem) : null,
-              ]
-                .filter(Boolean)
-                .join(" ") || undefined
-            }
+            description={VAULT_SYNC_JOIN_CHOICE_DESCRIPTION}
+            status={[
+              presentation.description,
+              vaultSyncPendingLabel(status.pendingUploads),
+              status.problem ? vaultSyncProblemMessage(status.problem) : null,
+              VAULT_SYNC_NOTICE,
+            ]
+              .filter(Boolean)
+              .join(" ")}
             control={
-              actions.includes("join") ? (
-                <Button
-                  size="sm"
-                  variant={status.state === "off" ? "default" : "outline"}
-                  disabled={disabled}
-                  onClick={() => void run("join", "Could not join sync", () => join(target))}
-                >
-                  {status.state === "off" ? "Sync secrets across your machines" : "Rejoin"}
-                </Button>
-              ) : null
+              <Switch
+                aria-label={VAULT_SYNC_JOIN_CHOICE_LABEL}
+                checked={vaultSyncShared(status.state)}
+                disabled={disabled || status.state === "unavailable"}
+                onCheckedChange={(checked) =>
+                  void (checked
+                    ? run("join", "Could not share secrets", () => join(target))
+                    : run("leave", "Could not stop sharing secrets", () => leave(target)))
+                }
+              />
             }
           />
+          {status.state === "needs_rejoin" ? (
+            <SettingsRow
+              title="Rejoin"
+              control={
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={disabled}
+                  onClick={() => void run("join", "Could not rejoin", () => join(target))}
+                >
+                  Rejoin
+                </Button>
+              }
+            />
+          ) : null}
           {status.state === "on"
             ? vaultSyncEnvironmentRows(status, labelOf).map((row) => (
                 <SettingsRow
@@ -190,22 +210,6 @@ export function SecretsSyncSection({
                   }}
                 >
                   Rotate key
-                </Button>
-              }
-            />
-          ) : null}
-          {actions.includes("leave") ? (
-            <SettingsRow
-              title="Stop syncing on this machine"
-              description="Its entries stay here."
-              control={
-                <Button
-                  size="xs"
-                  variant="outline"
-                  disabled={disabled}
-                  onClick={() => void run("leave", "Could not stop syncing", () => leave(target))}
-                >
-                  Stop syncing
                 </Button>
               }
             />

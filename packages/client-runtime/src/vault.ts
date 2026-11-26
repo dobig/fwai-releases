@@ -244,6 +244,11 @@ export const VAULT_SYNC_STATE_PRESENTATION: Readonly<
 export type VaultSyncAction = "join" | "leave" | "turnOff" | "rotate" | "revoke";
 
 /** `join` is **Rejoin** in `needs_rejoin`. Leaving is always possible once joined. */
+/** The "Share secrets with my other machines" switch: on once this machine has joined. */
+export function vaultSyncShared(state: VaultSyncState): boolean {
+  return state === "waiting" || state === "on" || state === "needs_rejoin";
+}
+
 export function vaultSyncActions(state: VaultSyncState): ReadonlyArray<VaultSyncAction> {
   switch (state) {
     case "unavailable":
