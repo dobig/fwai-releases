@@ -1213,6 +1213,14 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:fwai-gateway:disconnect",
       tag: WS_METHODS.fwaiGatewayDisconnect,
     }),
+    fwaiAttestationRegistration: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:fwai-attestation:registration",
+      tag: WS_METHODS.fwaiAttestationRegistration,
+    }),
+    fwaiAttestationReport: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:fwai-attestation:report",
+      tag: WS_METHODS.fwaiAttestationReport,
+    }),
     codexAuthCallbackState: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:codex:auth-callback",
       tag: WS_METHODS.codexAuthCallbackSubscribe,

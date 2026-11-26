@@ -87,6 +87,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Clock from "effect/Clock";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
@@ -151,6 +152,9 @@ import {
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import { FWAI_MCP_SERVER_NAME } from "@t3tools/shared/fwaiMcpNames";
+import { attestationRenewalDue } from "../../fwaiGateway/attestationHeaders.ts";
+import { attestCodexThreadConfig } from "../../fwaiGateway/codexAttestation.ts";
+import type { FwaiAttestationClaims } from "../../fwaiGateway/FwaiAttestation.ts";
 import {
   CODEX_GATEWAY_PROVIDER_ID,
   FWAI_GATEWAY_PROJECT_ENV,
@@ -1314,6 +1318,7 @@ function codexThreadRuntimeParams(input: {
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
   readonly modelSelection?: { readonly model: string };
   readonly runtimePolicy?: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
+  readonly attestation?: Readonly<Record<string, string>>;
 }): {
   readonly cwd?: string;
   readonly model?: string;
@@ -1337,6 +1342,7 @@ function codexThreadRuntimeParams(input: {
               },
             },
           }),
+      ...input.attestation,
     },
   };
 }
@@ -1725,6 +1731,30 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             yield* Ref.set(initialized, true);
           }),
         );
+        // Earliest expiry among the attestation headers threads in this process were loaded with.
+        const attestationExpiresAt = yield* Ref.make<number | null>(null);
+        const threadAttestation = (cwd: string | null | undefined, claims: FwaiAttestationClaims) =>
+          attestCodexThreadConfig(
+            ensureInitialized.pipe(
+              Effect.andThen(
+                client.request("config/read", {
+                  includeLayers: false,
+                  ...(cwd == null ? {} : { cwd }),
+                }),
+              ),
+              Effect.map((response) => response.config),
+            ),
+            claims,
+          ).pipe(
+            Effect.tap(({ expiresAtMs }) =>
+              expiresAtMs === null
+                ? Effect.void
+                : Ref.update(attestationExpiresAt, (current) =>
+                    current === null ? expiresAtMs : Math.min(current, expiresAtMs),
+                  ),
+            ),
+            Effect.map(({ config }) => config),
+          );
         const now = yield* DateTime.now;
         const session = providerSession({
           providerSessionId: input.providerSessionId,
@@ -6551,6 +6581,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           providerSession: session,
           events: Stream.fromEffectRepeat(Queue.take(events)),
           canReuseContextUsage: canReuseCodexContextUsage,
+          attestationRenewalDue: Effect.gen(function* () {
+            return attestationRenewalDue(
+              yield* Ref.get(attestationExpiresAt),
+              yield* Clock.currentTimeMillis,
+            );
+          }),
           // Idle release can beat delayed subagent resumes: Codex reports them completed between turns with no resume-expected signal.
           hasPendingBackgroundWork: Effect.gen(function* () {
             for (const items of (yield* Ref.get(runningCommandItemsByTurn)).values()) {
@@ -6597,13 +6633,19 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           }),
           ensureThread: (threadInput) =>
             ensureInitialized.pipe(
-              Effect.andThen(mcpSessions.read(threadInput.threadId)),
-              Effect.flatMap((mcpSession) =>
+              Effect.andThen(
+                Effect.all([
+                  mcpSessions.read(threadInput.threadId),
+                  threadAttestation(threadInput.runtimePolicy.cwd, { thr: threadInput.threadId }),
+                ]),
+              ),
+              Effect.flatMap(([mcpSession, attestation]) =>
                 client.request("thread/start", {
                   ...codexThreadRuntimeParams({
                     mcpSession,
                     modelSelection: threadInput.modelSelection,
                     runtimePolicy: threadInput.runtimePolicy,
+                    attestation,
                   }),
                   // Resume keeps the provider the thread started with; only new threads switch.
                   // Managed runtimes (resolveRuntime) launch without the gateway provider.
@@ -6637,13 +6679,17 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             function* (threadInput) {
               const nativeThreadId = yield* getNativeThreadId(threadInput.providerThread);
               // excludeTurns is not in the generated request schema yet.
+              const appThreadId = threadInput.threadId ?? threadInput.providerThread.appThreadId;
+              const attestation = yield* threadAttestation(threadInput.runtimePolicy?.cwd, {
+                sid: nativeThreadId,
+                ...(appThreadId === null ? {} : { thr: appThreadId }),
+              });
               const resume = client.raw.request("thread/resume", {
                 threadId: nativeThreadId,
                 excludeTurns: true,
                 ...codexThreadRuntimeParams({
-                  mcpSession: yield* readMcpSession(
-                    threadInput.threadId ?? threadInput.providerThread.appThreadId,
-                  ),
+                  attestation,
+                  mcpSession: yield* readMcpSession(appThreadId),
                   ...(threadInput.modelSelection === undefined
                     ? {}
                     : { modelSelection: threadInput.modelSelection }),
@@ -7370,13 +7416,18 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               }
               // thread/revert requires the thread loaded in this app-server; resume after restart or idle release.
               if (!loaded) {
+                const appThreadId = threadInput.providerThread.appThreadId;
                 yield* client.raw.request("thread/resume", {
                   threadId,
                   excludeTurns: true,
                   ...codexThreadRuntimeParams({
-                    mcpSession: yield* readMcpSession(threadInput.providerThread.appThreadId),
+                    mcpSession: yield* readMcpSession(appThreadId),
                     modelSelection: input.modelSelection,
                     runtimePolicy: input.runtimePolicy,
+                    attestation: yield* threadAttestation(input.runtimePolicy.cwd, {
+                      sid: threadId,
+                      ...(appThreadId === null ? {} : { thr: appThreadId }),
+                    }),
                   }),
                 });
               }
@@ -7426,6 +7477,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       ? {}
                       : { lastTurnId: boundary.lastTurnId }),
                     ...codexThreadRuntimeParams({
+                      attestation: yield* threadAttestation(threadInput.runtimePolicy?.cwd, {
+                        thr: threadInput.targetThreadId,
+                      }),
                       mcpSession: yield* mcpSessions.read(threadInput.targetThreadId),
                       ...(threadInput.modelSelection === undefined
                         ? {}

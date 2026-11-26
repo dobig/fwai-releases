@@ -1071,6 +1071,22 @@ export const layerWithOptions = (
           ),
         );
 
+      // Only an idle session restarts: no turn runs and no background work would be cut off.
+      const attestationRenewalDue = Effect.fn("ProviderSessionManager.attestationRenewalDue")(
+        function* (entry: LiveSessionEntry) {
+          const { runtime } = entry;
+          if (entry.busyTurns.size > 0 || runtime.attestationRenewalDue === undefined) return false;
+          if (!(yield* runtime.attestationRenewalDue.pipe(Effect.orElseSucceed(() => false)))) {
+            return false;
+          }
+          return runtime.hasPendingBackgroundWork === undefined
+            ? true
+            : !(yield* runtime.hasPendingBackgroundWork.pipe(
+                Effect.catchCause(() => Effect.succeed(true)),
+              ));
+        },
+      );
+
       const releaseIfStillIdle = Effect.fn("ProviderSessionManager.releaseIfStillIdle")(
         function* (input: {
           readonly providerSessionId: ProviderSessionId;
@@ -2065,7 +2081,27 @@ export const layerWithOptions = (
                 }
               }
               const key = sessionKey(input.providerSessionId);
-              const existing = (yield* Ref.get(sessions)).get(key);
+              let existing = (yield* Ref.get(sessions)).get(key);
+              if (existing !== undefined && (yield* attestationRenewalDue(existing))) {
+                // The header is fixed at launch; restarting between turns signs a fresh one.
+                yield* releaseEntry({
+                  providerSessionId: input.providerSessionId,
+                  reason: "idle_timeout",
+                  detail: "Provider session restarted to renew its fwai attestation.",
+                  onlyIfIdleGeneration: existing.idleGeneration,
+                }).pipe(
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning(
+                      "orchestration-v2.driver-session.attestation-renewal-failed",
+                      {
+                        providerSessionId: input.providerSessionId,
+                        cause,
+                      },
+                    ),
+                  ),
+                );
+                existing = (yield* Ref.get(sessions)).get(key);
+              }
               if (existing !== undefined) {
                 const attached = existing.attachedThreadIds.has(input.threadId);
                 if (!attached && !existing.supportsMultipleProviderThreads) {

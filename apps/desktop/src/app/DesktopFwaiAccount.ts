@@ -34,6 +34,8 @@ const FWAI_ACCOUNT_PATHS = new Set([
   "/v1/auth/introspect",
   // Approves this account's own environment for fwai Gateway routing without a second sign-in.
   "/v1/oauth/device/approve",
+  // Registers a connected environment's attestation key under this account (llm_gateway#760).
+  "/v1/me/fwai/environments",
   // Plan and quota shown beside the fwai Gateway switch.
   "/api/oauth/usage",
   "/v1/subscription",

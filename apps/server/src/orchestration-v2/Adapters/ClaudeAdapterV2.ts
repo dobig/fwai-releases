@@ -198,6 +198,8 @@ import {
   makeSubagentConversationArtifacts,
   subagentThreadTitle,
 } from "@t3tools/provider-core/server/subagentProjection";
+import { attestationRenewalDue } from "../../fwaiGateway/attestationHeaders.ts";
+import { attestClaudeSdkSettings } from "../../fwaiGateway/claudeAttestation.ts";
 import {
   claudeGatewaySettings,
   resolveFwaiGatewayRoute,
@@ -2593,6 +2595,18 @@ const decodeClaudeEnvSettings = Schema.decodeUnknownEffect(
   ),
 );
 
+const decodeClaudeGatewaySettings = Schema.decodeUnknownEffect(
+  fromLenientJson(
+    Schema.StructWithRest(
+      Schema.Struct({
+        env: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+        apiKeyHelper: Schema.optionalKey(Schema.Unknown),
+      }),
+      [Schema.Record(Schema.String, Schema.Unknown)],
+    ),
+  ),
+);
+
 function claudeBypassAvailability(
   settings: typeof ClaudeBypassSettings.Type,
 ): ClaudeBypassAvailability {
@@ -4430,19 +4444,24 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
   });
   // Settings env beats the process env, local over project over user, and a local file an older
   // Claude Code left in cwd applies under the root one. resolveSettings reads local from cwd only.
+  const claudeSettingsFiles = Effect.fn("ClaudeAdapterV2.settingsFiles")(function* (
+    cwd: string | null,
+  ) {
+    const localDirectory = cwd === null ? null : yield* localSettingsDirectory(cwd);
+    return [
+      ...(cwd === null || localDirectory === null
+        ? []
+        : [
+            path.join(localDirectory, ".claude", "settings.local.json"),
+            ...(localDirectory === cwd ? [] : [path.join(cwd, ".claude", "settings.local.json")]),
+            path.join(cwd, ".claude", "settings.json"),
+          ]),
+      path.join(homePath, "settings.json"),
+    ];
+  });
   const resolveToolSearchOverride = Effect.fn("ClaudeAdapterV2.resolveToolSearchOverride")(
     function* (cwd: string | null) {
-      const localDirectory = cwd === null ? null : yield* localSettingsDirectory(cwd);
-      const settingsFiles = [
-        ...(cwd === null || localDirectory === null
-          ? []
-          : [
-              path.join(localDirectory, ".claude", "settings.local.json"),
-              ...(localDirectory === cwd ? [] : [path.join(cwd, ".claude", "settings.local.json")]),
-              path.join(cwd, ".claude", "settings.json"),
-            ]),
-        path.join(homePath, "settings.json"),
-      ];
+      const settingsFiles = yield* claudeSettingsFiles(cwd);
       for (const settingsFile of settingsFiles) {
         const value = yield* readToolSearchSetting(settingsFile);
         if (value !== undefined) return claudeToolSearchOverride(value);
@@ -4450,6 +4469,27 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
       return claudeToolSearchOverride(adapterOptions.environment.ENABLE_TOOL_SEARCH);
     },
   );
+
+  // The same files in the same order decide Claude's base URL and key helper.
+  const attestQuerySettings = Effect.fn("ClaudeAdapterV2.attestQuerySettings")(function* (input: {
+    readonly cwd: string | null;
+    readonly sdkSettings: ClaudeSdkSettings | undefined;
+    readonly sessionId: string;
+    readonly threadId: ThreadId;
+  }) {
+    const layers = yield* Effect.forEach(yield* claudeSettingsFiles(input.cwd), (settingsFile) =>
+      fileSystem.readFileString(settingsFile).pipe(
+        Effect.flatMap(decodeClaudeGatewaySettings),
+        Effect.orElseSucceed(() => ({})),
+      ),
+    );
+    return yield* attestClaudeSdkSettings({
+      sdkSettings: input.sdkSettings,
+      layers,
+      processEnv: adapterOptions.environment,
+      claims: { sid: input.sessionId, thr: input.threadId },
+    });
+  });
 
   const userInvocableSkills = (cwd: string | null) =>
     discoverClaudeSkills(
@@ -4537,6 +4577,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const interruptedTurns = yield* Ref.make(new Set<OrchestrationV2ProviderTurn["id"]>());
         const steeredTurns = yield* Ref.make(new Set<OrchestrationV2ProviderTurn["id"]>());
         const queryContext = yield* Ref.make<ClaudeLiveQueryContext | null>(null);
+        // Expiry of the attestation header the live query was opened with.
+        const attestationExpiresAt = yield* Ref.make<number | null>(null);
         // A worktree handoff changes the project settings even within one session.
         let bypassCache: { cwd: string | null; availability: ClaudeBypassAvailability } | null =
           null;
@@ -9807,6 +9849,21 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const shouldResume =
             resumeSessionAt !== undefined || openedWithResume || hasPersistedProviderTurn;
           const toolSearchOverride = yield* resolveToolSearchOverride(turnInput.runtimePolicy.cwd);
+          const attested = yield* attestQuerySettings({
+            cwd: turnInput.runtimePolicy.cwd,
+            sdkSettings:
+              adapterOptions.sdkSettings === undefined
+                ? undefined
+                : withFwaiGatewayProject(
+                    adapterOptions.sdkSettings,
+                    fwaiGatewayProjectFor(
+                      adapterOptions.environment,
+                      turnInput.appThread.fwaiGatewayProjectId,
+                    ),
+                  ),
+            sessionId: nativeThreadId,
+            threadId: turnInput.threadId,
+          });
           const queryOptions = makeClaudeQueryOptions({
             modelSelection: turnInput.modelSelection,
             nativeThreadId,
@@ -9815,17 +9872,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             cwd: turnInput.runtimePolicy.cwd,
             attachmentsDir,
             settings: adapterOptions.settings,
-            ...(adapterOptions.sdkSettings === undefined
-              ? {}
-              : {
-                  sdkSettings: withFwaiGatewayProject(
-                    adapterOptions.sdkSettings,
-                    fwaiGatewayProjectFor(
-                      adapterOptions.environment,
-                      turnInput.appThread.fwaiGatewayProjectId,
-                    ),
-                  ),
-                }),
+            ...(attested.sdkSettings === undefined ? {} : { sdkSettings: attested.sdkSettings }),
             environment: claudeQueryEnvironment(
               adapterOptions.environment,
               turnInput.appThread,
@@ -9873,6 +9920,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   : Effect.void,
               ),
             );
+          yield* Ref.set(attestationExpiresAt, attested.expiresAtMs);
           // Mark only successful opens; retries must not resume sessions that failed to create.
           yield* Ref.update(openedNativeThreads, (current) => {
             if (current.has(nativeThreadId)) {
@@ -10627,6 +10675,12 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             resolveClaudeCatalogContextWindowTokens(BUNDLED_CLAUDE_MODEL_CATALOG, selection),
           events: Stream.fromEffectRepeat(Queue.take(events)),
           backgroundTasksEndWithProcess: true,
+          attestationRenewalDue: Effect.gen(function* () {
+            return attestationRenewalDue(
+              yield* Ref.get(attestationExpiresAt),
+              yield* Clock.currentTimeMillis,
+            );
+          }),
           hasPendingBackgroundWork: Effect.gen(function* () {
             for (const roster of (yield* Ref.get(pendingBackgroundTasksByNativeThread)).values()) {
               if (roster.size > 0) {

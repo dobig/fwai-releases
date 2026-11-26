@@ -44,6 +44,8 @@ const RPC_AGGREGATES = {
   [WS_METHODS.codexAuthCallbackSubscribe]: "provider",
   [WS_METHODS.fwaiGatewaySubscribe]: "provider",
   [WS_METHODS.fwaiGatewayConnect]: "provider",
+  [WS_METHODS.fwaiAttestationRegistration]: "provider",
+  [WS_METHODS.fwaiAttestationReport]: "provider",
   [WS_METHODS.fwaiGatewayDisconnect]: "provider",
   [WS_METHODS.providerAuthRespond]: "provider",
   [WS_METHODS.providerAuthCancel]: "provider",
