@@ -37,7 +37,8 @@ const t3: VoiceT3 = {
   launch: async () => ({ threadId: null }),
 };
 
-function setup(heard: string) {
+function setup(heard: string, prime?: number) {
+  const recognized: Array<Uint8Array> = [];
   const handled: Array<[string, string | null]> = [];
   const llm: VoiceLlm = {
     parseIntent: async (): Promise<Intent> => ({ action: "none", reply: "嗯？" }),
@@ -69,9 +70,7 @@ function setup(heard: string) {
   };
   const history: Array<HistoryEvent> = [];
   const transcribe: Transcribe = async (_config, chunks, _hotwords, onPartial) => {
-    for await (const _ of chunks) {
-      // drain what the page sends, as the recognizer does
-    }
+    for await (const piece of chunks) recognized.push(piece); // what recognition gets
     if (heard) onPartial?.(heard.slice(0, 2));
     return heard;
   };
@@ -93,13 +92,14 @@ function setup(heard: string) {
     endOfSpeech: async (startTimeout) => {
       windows.push(startTimeout);
       const detector = new EndOfSpeech(null, 0.4, startTimeout ?? 6);
+      if (prime) detector.prime(prime);
       detectors.push(detector);
       return detector;
     },
     version: "test",
     stalledSeconds: 0.05,
   });
-  return { hub, handled, history, speaker, windows, detectors };
+  return { hub, handled, history, speaker, windows, detectors, recognized };
 }
 
 describe("noWords", () => {
@@ -156,6 +156,19 @@ describe("VoiceHub", () => {
       type: "partial",
       text: "现在",
     });
+  });
+
+  it("sends other voices to recognition as silence once the user's level is known", async () => {
+    const { hub, recognized } = setup("现在是哪个", 3000);
+    const mic = new Mic();
+    const amplitudes = [50, 700, 700, 3000, 3000, 60, 60, 60, 60, 60, 60];
+    for (const amplitude of amplitudes) mic.put(chunk(amplitude));
+    await hub.runTurn(new Client(), mic, null);
+    const loud = (piece: Uint8Array) =>
+      new Int16Array(piece.buffer, piece.byteOffset, piece.byteLength / 2).some((s) => s > 500);
+    // The first 700 (a video) goes as silence; the second is held and goes with the user's start.
+    expect(recognized.map(loud).slice(0, 5)).toEqual([false, false, true, true, true]);
+    expect(recognized.length).toBeGreaterThanOrEqual(5);
   });
 
   it("stops all speech on silence", () => {

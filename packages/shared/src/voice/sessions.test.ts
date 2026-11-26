@@ -203,6 +203,16 @@ describe("announcing", () => {
     expect(speaker.said).toEqual(["网关做完了。全部测试通过", "网关做完了。全部测试通过"]);
   });
 
+  it("leaves out the current session's name", async () => {
+    const { sessions, speaker } = make();
+    sessions.observe(thread("running", "r1"), "yongheng");
+    sessions.initialized = true;
+    sessions.current = "t1";
+    sessions.observe(thread("completed", "r1"), "yongheng");
+    await sessions.settled();
+    expect(speaker.said).toEqual(["做完了。全部测试通过"]);
+  });
+
   it("announces a question once, and again when a new one is asked", async () => {
     const t3 = new FakeT3();
     t3.reply = "用哪个日志级别？";

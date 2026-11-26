@@ -304,20 +304,32 @@ export class VoiceHub implements VoicePlayer {
     // Separate from the recognition stream so the beep doesn't wait for its connection.
     const watch = async () => {
       let live = false;
+      // One chunk held back while the voice is not the user's: if they start in the next one,
+      // it goes too, so a soft first syllable is not lost. Others go as silence, keeping time.
+      let held: Uint8Array | null = null;
       try {
         for (;;) {
           const chunk = await mic.take(this.deps.stalledSeconds ?? 5); // the client went away
           if (!chunk) break;
           this.frames++;
-          toAsr.put(chunk);
           if (!live && isLive(chunk)) {
             live = true;
             socket.send({ type: "live" });
           } else if (!live && Date.now() - started > (this.deps.deadMicSeconds ?? 4) * 1000) {
+            toAsr.put(chunk);
             dead = true;
             break;
           }
-          if (live && (await detector.feed(chunk))) break;
+          const verdict = live ? await detector.feed(chunk) : null;
+          if (!live || detector.keepLast) {
+            if (held) toAsr.put(held);
+            held = null;
+            toAsr.put(chunk);
+          } else {
+            if (held) toAsr.put(new Uint8Array(held.length));
+            held = chunk;
+          }
+          if (verdict) break;
         }
       } finally {
         toAsr.put(null);

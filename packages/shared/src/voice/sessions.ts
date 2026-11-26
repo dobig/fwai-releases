@@ -452,7 +452,8 @@ export class Sessions {
   }
 
   private async announceFinish(tracked: Tracked): Promise<void> {
-    const name = this.name(tracked);
+    // The current session goes without its name: the user knows which one it is.
+    const name = tracked.thread.threadId === this.current ? "" : this.name(tracked);
     const status = tracked.thread.status;
     try {
       if (status === "completed") {
@@ -461,7 +462,9 @@ export class Sessions {
           ? await this.llm.summarize(text, asked, { detailed: this.detailed })
           : "没有留下回复。";
         if (summary === "SKIP") {
-          this.logger.info(`voice: skipped an announcement with no news from ${name}`);
+          this.logger.info(
+            `voice: skipped an announcement with no news from ${this.name(tracked)}`,
+          );
           return;
         }
         if (text && MORE_QUESTIONS.test(summary)) {

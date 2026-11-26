@@ -31,6 +31,8 @@ export class EndOfSpeech {
   static readonly MIN_VAD_RMS = 150; // with the model: just above silence, so soft speech counts
   static readonly VAD_THRESHOLD = 0.5;
   static readonly VOICE_RATIO = 0.3;
+  /** Audio kept for recognition after the user's voice drops, so word tails are not cut. */
+  static readonly HANGOVER_SECONDS = 0.5;
   private static readonly FRAME = 512;
 
   private elapsed = 0;
@@ -40,6 +42,10 @@ export class EndOfSpeech {
   private pending: Array<number> = [];
   private probability = 0;
   heardSpeech = false;
+  /** The user's level on this mic from earlier turns: audio well below it is not theirs. */
+  private primed = false;
+  /** Whether the last chunk fed should reach recognition. */
+  keepLast = true;
 
   private readonly detector: SpeechDetector | null;
   private readonly silenceSeconds: number;
@@ -73,6 +79,21 @@ export class EndOfSpeech {
    * The client's beep has been heard: the wait for a first word counts from here, not from
    * the first microphone frame, which reaches the server well before the beep reaches the user.
    */
+  /**
+   * Start from the user's level on this mic, learned in earlier turns: from the first word,
+   * quieter voices (a video, people nearby) neither count as speech nor reach recognition.
+   */
+  prime(level: number): void {
+    if (!(level > 0)) return;
+    this.voice = level;
+    this.primed = true;
+  }
+
+  /** The user's speaking level this turn, once they spoke. */
+  get voiceLevel(): number | null {
+    return this.heardSpeech ? this.voice : null;
+  }
+
   restartStartTimeout(): void {
     if (!this.heardSpeech) this.elapsed = 0;
   }
@@ -97,6 +118,10 @@ export class EndOfSpeech {
     } else {
       this.quietFor += seconds;
     }
+    this.keepLast =
+      !this.primed ||
+      speaking ||
+      (this.heardSpeech && this.quietFor <= EndOfSpeech.HANGOVER_SECONDS);
     if (!this.heardSpeech) return this.elapsed >= this.startTimeout ? "timeout" : null;
     if (this.quietFor >= this.silenceSeconds || this.elapsed >= this.maxSeconds) return "end";
     return null;

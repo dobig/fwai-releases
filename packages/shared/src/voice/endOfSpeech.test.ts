@@ -29,6 +29,30 @@ describe("EndOfSpeech", () => {
     expect(detector.heardSpeech).toBe(true);
   });
 
+  it("primed with the user's level, ignores quieter voices and keeps them from recognition", async () => {
+    const detector = new EndOfSpeech(null, 1);
+    detector.prime(3000);
+    await feedAll(detector, 50, 2);
+    await detector.feed(chunk(700)); // a video nearby: loud enough alone, far below the user
+    expect(detector.heardSpeech).toBe(false);
+    expect(detector.keepLast).toBe(false);
+    await detector.feed(chunk(2800));
+    expect(detector.heardSpeech).toBe(true);
+    expect(detector.keepLast).toBe(true);
+    await detector.feed(chunk(700)); // right after: a word tail, kept
+    expect(detector.keepLast).toBe(true);
+    await feedAll(detector, 700, 3); // past the hangover: not the user
+    expect(detector.keepLast).toBe(false);
+    expect(detector.voiceLevel).toBeGreaterThan(1500);
+  });
+
+  it("keeps everything when not primed", async () => {
+    const detector = new EndOfSpeech(null, 1);
+    await feedAll(detector, 50, 3);
+    expect(detector.keepLast).toBe(true);
+    expect(detector.voiceLevel).toBeNull();
+  });
+
   it("gives up without speech", async () => {
     const detector = new EndOfSpeech(null, 2, 1);
     expect((await feedAll(detector, 80, 5)).at(-1)).toBe("timeout");
