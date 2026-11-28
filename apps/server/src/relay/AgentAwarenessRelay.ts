@@ -94,6 +94,8 @@ function shouldPublishAgentAwarenessEvent(
     case "thread.pull-request-link-updated":
     case "thread.pull-request-synced":
     case "thread.settled":
+    // Seeing a finished thread clears its Done card.
+    case "thread.visited":
     case "thread.model-selection-updated":
     case "thread.provider-switched":
     case "run.created":
@@ -113,7 +115,6 @@ function shouldPublishAgentAwarenessEvent(
     case "thread.unpinned":
     case "thread.pin-reordered":
     case "thread.active-reordered":
-    case "thread.visited":
     case "thread.marked-unread":
     case "thread.runtime-mode-updated":
     case "thread.interaction-mode-updated":
@@ -350,12 +351,11 @@ export function resolveAgentAwarenessRelayActiveThreadIds(input: {
         project,
         thread,
       });
-      return (
-        state !== null &&
-        (state.phase !== "completed" && state.phase !== "failed"
-          ? true
-          : terminalWorkSinceStart(thread, input.startedAt))
-      );
+      // Startup recovery ends runs before the relay subscribes, so those need a tombstone too.
+      if (state === null || state.phase === "completed" || state.phase === "failed") {
+        return terminalWorkSinceStart(thread, input.startedAt);
+      }
+      return true;
     })
     .map((thread) => thread.id);
 }

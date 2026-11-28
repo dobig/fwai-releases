@@ -30,6 +30,8 @@ describe("projectThreadAwarenessV2", () => {
         | "pendingRuntimeRequest"
         | "lineage"
         | "settledOverride"
+        | "lastVisitedAt"
+        | "latestRunCompletedAt"
       >
     > = {},
   ) => ({
@@ -101,6 +103,20 @@ describe("projectThreadAwarenessV2", () => {
         thread: v2Thread({ status, settledOverride: "settled" }),
       }),
     ).toBeNull();
+  });
+
+  it.each(["completed", "failed"] as const)("removes %s work the user has seen", (status) => {
+    const completedAt = DateTime.makeUnsafe("2026-05-22T11:59:00.000Z");
+    const project_ = (lastVisitedAt: DateTime.Utc | null) =>
+      projectThreadAwarenessV2({
+        environmentId: "env-1" as EnvironmentId,
+        project,
+        thread: v2Thread({ status, latestRunCompletedAt: completedAt, lastVisitedAt }),
+      });
+    expect(project_(null)?.phase).toBe(status);
+    // Mark-unread rewinds the visit to just before completion.
+    expect(project_(DateTime.subtract(completedAt, { milliseconds: 1 }))?.phase).toBe(status);
+    expect(project_(completedAt)).toBeNull();
   });
 
   it.each(["starting", "running", "waiting"] as const)(

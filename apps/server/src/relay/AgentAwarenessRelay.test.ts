@@ -95,12 +95,13 @@ const decodePublishPayload = Schema.decodeUnknownSync(Schema.fromJsonString(Publ
 const unused = () => Effect.die("Unexpected test dependency call");
 
 describe("startup agent activity", () => {
-  it("publishes active work and only terminal runs completed after startup", () => {
+  it("publishes active work and only runs that ended after startup", () => {
     const startedAt = DateTime.toEpochMillis(DateTime.makeUnsafe(NOW));
     const oldCompleted = ThreadId.make("old-completed");
     const newCompleted = ThreadId.make("new-completed");
     const oldFailed = ThreadId.make("old-failed");
     const newFailed = ThreadId.make("new-failed");
+    const recoveredCancelled = ThreadId.make("recovered-cancelled");
     const ids = AgentAwarenessRelay.resolveAgentAwarenessRelayActiveThreadIds({
       environmentId: EnvironmentId.make("relay-env"),
       startedAt,
@@ -127,11 +128,22 @@ describe("startup agent activity", () => {
           status: "failed",
           latestRunCompletedAt: DateTime.makeUnsafe("2026-09-04T12:00:01.000Z"),
         }),
+        shell({
+          id: ThreadId.make("old-cancelled"),
+          status: "cancelled",
+          latestRunCompletedAt: DateTime.makeUnsafe("2026-09-04T11:59:00.000Z"),
+        }),
+        // Startup recovery cancels runs before the relay subscribes; the relay still shows them working.
+        shell({
+          id: recoveredCancelled,
+          status: "cancelled",
+          latestRunCompletedAt: DateTime.makeUnsafe("2026-09-04T12:00:01.000Z"),
+        }),
         shell({ id: ThreadId.make("idle"), status: "idle" }),
         shell({ id: ThreadId.make("missing-project"), projectId: ProjectId.make("missing") }),
       ],
     });
-    assert.deepStrictEqual(ids, [THREAD_ID, newCompleted, newFailed]);
+    assert.deepStrictEqual(ids, [THREAD_ID, newCompleted, newFailed, recoveredCancelled]);
   });
 });
 
@@ -418,6 +430,61 @@ describe("AgentAwarenessRelay", () => {
         assert.equal(publications.length, 3);
         assert.equal(publications[2]?.state, null);
       }).pipe(Effect.scoped),
+  );
+
+  it.effect.each(["completed", "failed"] as const)(
+    "publishes a tombstone once the user visits a %s thread",
+    (status) =>
+      Effect.gen(function* () {
+        const events = yield* Queue.unbounded<OrchestrationV2DomainEvent>();
+        const pulls = yield* Queue.unbounded<void>();
+        const { relay, currentShell, publications } = yield* makeTestRelay({
+          domainEvents: Stream.fromEffectRepeat(
+            Queue.offer(pulls, undefined).pipe(Effect.andThen(Queue.take(events))),
+          ),
+        });
+        yield* relay.start();
+        yield* Queue.take(pulls);
+        yield* relay.publishThread(THREAD_ID);
+        const terminal = shell({ status, latestRunCompletedAt: yield* DateTime.now });
+        yield* Ref.set(currentShell, terminal);
+        yield* relay.publishThread(THREAD_ID);
+        yield* TestClock.adjust("5 seconds");
+        yield* relay.drain;
+        assert.equal(publications[1]?.state?.phase, status);
+
+        const now = yield* DateTime.now;
+        const visited = { ...terminal, lastVisitedAt: now };
+        yield* Ref.set(currentShell, visited);
+        yield* Queue.offer(events, {
+          id: EventId.make("event:visited"),
+          type: "thread.visited",
+          threadId: THREAD_ID,
+          occurredAt: now,
+          payload: visited,
+        });
+        yield* Queue.take(pulls);
+        yield* relay.drain;
+        yield* TestClock.adjust("5 seconds");
+        yield* relay.drain;
+        assert.equal(publications.length, 3);
+        assert.equal(publications[2]?.state, null);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("tombstones a run recovery cancelled before this process published it", () =>
+    Effect.gen(function* () {
+      const { relay, currentShell, publications } = yield* makeTestRelay();
+      yield* Ref.set(
+        currentShell,
+        shell({ status: "cancelled", latestRunCompletedAt: yield* DateTime.now }),
+      );
+      yield* relay.publishThread(THREAD_ID);
+      yield* TestClock.adjust("5 seconds");
+      yield* relay.drain;
+      assert.equal(publications.length, 1);
+      assert.equal(publications[0]?.state, null);
+    }),
   );
 
   it.effect("holds a completion through a continuation gap, then publishes it once", () =>

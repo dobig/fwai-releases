@@ -44,6 +44,8 @@ export interface ProjectThreadAwarenessV2Input {
     OrchestrationV2ThreadShell,
     | "activityRunStatus"
     | "id"
+    | "lastVisitedAt"
+    | "latestRunCompletedAt"
     | "lineage"
     | "latestRunStopRequested"
     | "modelSelection"
@@ -68,7 +70,7 @@ export function projectThreadAwarenessV2(
   if (phase === "completed" && thread.latestRunStopRequested === true) return null;
   // Resolve the phase first so live or waiting work stays visible after settlement.
   if (
-    thread.settledOverride === "settled" &&
+    (thread.settledOverride === "settled" || terminalRunSeen(thread)) &&
     (phase === "completed" || phase === "failed") &&
     !backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? [])
   ) {
@@ -92,6 +94,15 @@ export function projectThreadAwarenessV2(
     updatedAt: DateTime.formatIso(thread.updatedAt),
     deepLink: buildAgentAwarenessDeepLink({ environmentId, threadId: thread.id }),
   };
+}
+
+// Matches the sidebar's unread rule: a visit at or after completion means the user saw it.
+function terminalRunSeen(thread: ProjectThreadAwarenessV2Input["thread"]): boolean {
+  if (thread.lastVisitedAt == null || thread.latestRunCompletedAt == null) return false;
+  return (
+    DateTime.toEpochMillis(thread.lastVisitedAt) >=
+    DateTime.toEpochMillis(thread.latestRunCompletedAt)
+  );
 }
 
 function resolveThreadAwarenessPhaseV2(
